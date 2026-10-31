@@ -28,25 +28,34 @@ export function SettingsPage() {
   const handledReturn = useRef(false);
   const strava = useStrava({ enabled: profile?.activity_tracking_mode === "strava" || returned?.kind === "connected" });
 
-  // Back from Strava: show the outcome, refresh status, clear the query string, and start the first sync.
+  // Back from Strava: wait for the signed-in user (the store binds to it), show the outcome, refresh status, start the
+  // first sync, and clear the query string only after that handling has run.
+  const userId = user?.id ?? null;
   useEffect(() => {
-    if (!returned || handledReturn.current) return;
+    if (!returned || handledReturn.current || !userId) return;
     handledReturn.current = true;
-    const search = stripReturnParams(window.location.search);
-    window.history.replaceState(window.history.state, "", `${window.location.pathname}${search}${window.location.hash}`);
+    const clearQuery = () => {
+      const search = stripReturnParams(window.location.search);
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}${search}${window.location.hash}`);
+    };
     if (returned.kind === "error") {
       setReturnBanner({ kind: "error", text: mapReturnReason(returned.reason) });
+      clearQuery();
       return;
     }
     setReturnBanner({ kind: "success", text: "Strava connected. Importing your last 90 days of activities..." });
     void (async () => {
-      await strava.refresh();
-      await refresh();
-      await strava.syncNow("initial");
+      try {
+        await strava.refresh();
+        await refresh();
+        await strava.syncNow("initial");
+      } finally {
+        clearQuery();
+      }
     })();
-    // Runs once per page visit; the ref guards against StrictMode's double effect.
+    // Runs once per page visit once the user is known; the ref guards against StrictMode's double effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [userId]);
 
   if (loading) return <Spinner label="Loading settings" />;
   if (error) return <ErrorState message={`Could not load your profile: ${error}`} onRetry={() => void refresh()} />;

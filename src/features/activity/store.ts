@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { enqueue } from "@/lib/outbox";
 import { supabase } from "@/lib/supabase";
 import type { ActivityHrZoneRow, ActivityRow, ActivityTemplateRow, ActivityTypeRow } from "@/lib/database.types";
-import { PHASE2_COLUMNS, isVisible, mergeActivities, type ActivityWrite } from "./logic";
+import {
+  PHASE2_COLUMNS, isVisible, mergeActivities, normalizeNotes, overlayNotes, withoutPending, type ActivityWrite, type PendingNotes,
+} from "./logic";
 
 /**
  * Local optimistic state + localStorage cache shared by the page and the sheet.
@@ -109,9 +111,55 @@ export async function loadActivities(userId: string, fromIso: string, pendingWri
   const { data, error } = await supabase.from("activities").select("*").eq("user_id", userId)
     .gte("start_time", fromIso).order("start_time", { ascending: false });
   if (error) throw new Error(error.message);
-  state = { ...state, activities: mergeActivities(state.activities, (data as ActivityRow[]) ?? [], { fromIso, pendingWrites, deleted }) };
+  const merged = mergeActivities(state.activities, (data as ActivityRow[]) ?? [], { fromIso, pendingWrites, deleted });
+  state = { ...state, activities: overlayNotes(merged, readPending()) };
   persist(); emit();
+  void flushPendingNotes();
 }
+
+const pendingKey = () => (userKey ? `ft.activity.pendingNotes.${userKey}` : null);
+function readPending(): PendingNotes {
+  const k = pendingKey();
+  return k ? read<PendingNotes>(k, {}) : {};
+}
+function writePending(p: PendingNotes) {
+  const k = pendingKey();
+  if (k) write(k, p);
+}
+
+/**
+ * Notes of a Strava row: the only editable field. Sends just `{ notes }` as an UPDATE of the existing row (never an insert,
+ * so a row deleted server-side stays deleted). Offline or on failure the note is kept locally and re-applied later.
+ */
+export async function saveStravaNotes(id: string, text: string): Promise<void> {
+  const notes = normalizeNotes(text);
+  state = { ...state, activities: state.activities.map((a) => (a.id === id ? { ...a, notes } : a)) };
+  persist(); emit();
+  writePending({ ...readPending(), [id]: notes });
+  await flushPendingNotes();
+}
+
+let flushing = false;
+/** Apply queued notes edits as updates. Safe to call any time; does nothing offline. */
+export async function flushPendingNotes(): Promise<void> {
+  if (flushing || (typeof navigator !== "undefined" && !navigator.onLine)) return;
+  const pending = readPending();
+  const ids = Object.keys(pending);
+  if (ids.length === 0) return;
+  flushing = true;
+  try {
+    const done: string[] = [];
+    for (const id of ids) {
+      const { error } = await supabase.from("activities").update({ notes: pending[id] }).eq("id", id);
+      if (!error) done.push(id);
+    }
+    writePending(withoutPending(readPending(), done));
+  } finally {
+    flushing = false;
+  }
+}
+
+if (typeof window !== "undefined") window.addEventListener("online", () => { void flushPendingNotes(); });
 
 /** After the manual twin is deleted, the Strava row no longer points at it (the DB does the same via ON DELETE SET NULL). */
 export function clearDuplicateLink(id: string) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SyncResult } from "@fittrack/shared";
 import {
+  BUSY_WAIT_SEC, MAX_BATCHES, MAX_BUSY_RETRIES, isBusyResult,
   AUTO_SYNC_INTERVAL_MS, MAX_RATE_LIMIT_RETRIES, chipView, clampWaitSec, formatCountdown, mapReturnReason, mapStravaError,
   parseReturnParams, progressText, secondsLeft, shouldAutoSync, stripReturnParams, syncLoop,
 } from "./logic";
@@ -46,7 +47,7 @@ describe("error mapping", () => {
   );
   it("includes server text for unknown codes", () => expect(mapStravaError("x", "oops").message).toContain("oops"));
   it("maps return reasons", () => {
-    expect(mapReturnReason("access_denied")).toMatch(/declined/);
+    expect(mapReturnReason("access_denied")).toMatch(/cancelled/);
     expect(mapReturnReason(null)).toMatch(/Could not connect/);
   });
 });
@@ -115,7 +116,7 @@ describe("syncLoop", () => {
   });
   it("gives up after too many rate limit retries", async () => {
     const h = harness([{ done: false, processed: 0, remaining: null, rateLimited: { retryAfterSec: 10 } }]);
-    expect((await syncLoop(h.deps)).outcome).toBe("gave_up");
+    expect((await syncLoop(h.deps)).outcome).toBe("rate_limited");
     expect(h.waits).toHaveLength(MAX_RATE_LIMIT_RETRIES);
   });
   it("stops when cancelled", async () => {
@@ -126,5 +127,54 @@ describe("syncLoop", () => {
   it("propagates errors", async () => {
     const h = harness([new Error("x")]);
     await expect(syncLoop(h.deps)).rejects.toThrow("x");
+  });
+});
+
+describe("busy lease", () => {
+  it("detects both busy shapes but not rate limits or real progress", () => {
+    expect(isBusyResult({ done: false, processed: 0, remaining: null })).toBe(true);
+    expect(isBusyResult({ done: false, processed: 0, remaining: 4, busy: true } as SyncResult)).toBe(true);
+    expect(isBusyResult({ done: false, processed: 0, remaining: null, rateLimited: { retryAfterSec: 9 } })).toBe(false);
+    expect(isBusyResult({ done: false, processed: 3, remaining: null })).toBe(false);
+    expect(isBusyResult({ done: true, processed: 0, remaining: 0 })).toBe(false);
+  });
+  it("waits 8s between busy answers, then continues", async () => {
+    const h = harness([{ done: false, processed: 0, remaining: null }, { done: true, processed: 2, remaining: 0 }]);
+    expect(await syncLoop(h.deps)).toEqual({ outcome: "done", processed: 2 });
+    expect(h.waits).toEqual([BUSY_WAIT_SEC]);
+  });
+  it("returns busy after the cap without spinning", async () => {
+    const h = harness([{ done: false, processed: 0, remaining: null }]);
+    expect((await syncLoop({ ...h.deps, busyWaitSec: 1 })).outcome).toBe("busy");
+    expect(h.waits).toHaveLength(MAX_BUSY_RETRIES);
+    expect(h.calls()).toBe(MAX_BUSY_RETRIES + 1);
+  });
+});
+
+describe("batch cap", () => {
+  it("returns too_many_batches, not a rate-limit outcome", async () => {
+    const h = harness([{ done: false, processed: 1, remaining: 9999 }]);
+    const r = await syncLoop(h.deps);
+    expect(r.outcome).toBe("too_many_batches");
+    expect(h.calls()).toBe(MAX_BATCHES);
+    expect(h.waits).toEqual([]);
+  });
+  it("notifies onResponse for each answer", async () => {
+    const h = harness([{ done: true, processed: 1, remaining: 0 }]);
+    let n = 0;
+    await syncLoop({ ...h.deps, onResponse: () => { n++; } });
+    expect(n).toBe(1);
+  });
+});
+
+describe("all Worker redirect reasons are mapped", () => {
+  const generic = mapReturnReason("zzz");
+  it.each(["access_denied", "oauth_error", "invalid_state", "missing_scope", "missing_code", "exchange_failed", "store_failed"])("%s", (r) => {
+    expect(mapReturnReason(r)).not.toBe(generic);
+  });
+  it("missing_scope mentions the box", () => expect(mapReturnReason("missing_scope")).toMatch(/View data about your activities/));
+  it("info chips show the message", () => {
+    const e = { code: "busy", action: "retry" as const, message: "A sync is already running, try again in a minute." };
+    expect(chipView({ connected: true, phase: "error", lastSyncAt: null, countdownSec: 0, error: e })?.label).toBe(e.message);
   });
 });
