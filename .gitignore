@@ -46,3 +46,7 @@ coverage/
 
 # Subagent worktrees
 .claude/worktrees/
+
+# Cloudflare local dev (secrets live here, never commit)
+.dev.vars
+.wrangler/
