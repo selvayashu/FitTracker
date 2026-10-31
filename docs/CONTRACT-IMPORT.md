@@ -7,7 +7,7 @@ Adds an **Import activity file** feature so workouts exported from a watch app (
 | Owner | Paths |
 |---|---|
 | Shared agent | `packages/shared/src/activityFiles.ts`, `packages/shared/src/activityFiles.test.ts`, and the one-line `export * from "./activityFiles";` in `packages/shared/src/index.ts` (replace the placeholder comment) |
-| Frontend agent | `src/features/activity/import/**` (new) and the minimal wiring in `src/features/activity/ActivityPage.tsx` (an "Import file" button that opens the sheet) |
+| Frontend agent | `src/features/activity/import/**` (new), `src/features/connections/**` (new), the minimal wiring in `src/features/activity/ActivityPage.tsx` (an "Import file" button that opens the sheet and a "Connections" link), a link to Connections in `src/features/profile/SettingsPage.tsx`, and the `not_configured` message mapping in `src/features/strava/logic.ts` |
 | Orchestrator | everything else, including the contract and README |
 
 ## Principles
@@ -58,3 +58,11 @@ Case-insensitive, trims; strips `Sport=`/`type` prefixes like `1`/`running` styl
 5. States: loading/parsing, error banner per file, empty selection, success summary. Accessible labels, dark mode, mobile first, no horizontal scroll at 360 px.
 Profile weight and max HR come from `useProfile()`; if weight is missing, imported calories without file calories stay empty and are flagged estimated (tell the user to complete their profile).
 Pure logic (status decisions, summary text, file validation, row assembly) in separate functions with Vitest tests.
+
+## Frontend: Connections screen (`src/features/connections/`, exports `ConnectionsPage`, route `/connections` wired by the orchestrator)
+
+A hub that lists every way workouts get into FitTrack, each as a card with its real status:
+1. **Strava**: reuse `StravaCard` and `useStrava` from `src/features/strava` (status, Connect, Sync now, Disconnect). Use the profile tracking mode only to decide the initial emphasis, not to hide the card: the card is always visible on this screen. If a connect or sync call fails with code `not_configured` (server settings missing) or the status call fails because `strava_status()` does not exist yet, show the explanatory state: "Strava is not set up on this server yet. Connecting needs a Strava developer app, and Strava requires a subscription to create one. You can bring your workouts in with a file instead." with a button that opens the import sheet. Never show raw server error text. Never call `/api/strava/*` automatically on this screen unless the user is in Strava mode or presses a button (the status RPC read is allowed).
+2. **Import an activity file (GPX/TCX)**: description, "Import file" button opening `ImportSheet`, and a collapsible help section "Getting a file from Zepp (Amazfit) on Android": open the Zepp app, open a workout, look for the Export or Share option and choose GPX if offered (menu names vary by app version); Garmin Connect: Export to GPX/TCX on the website; Strava: Export GPX/Export Original on the activity page on the web. Keep it factual and note that names vary by app version.
+3. **Add by hand**: link to the Add Activity form.
+Also: `ActivityPage` gets a small "Connections" link, SettingsPage links to `/connections`, and `mapStravaError` in `src/features/strava/logic.ts` gains a `not_configured` case with a friendly message (with a unit test). States: loading, error with retry, dark mode, mobile first, accessible.
