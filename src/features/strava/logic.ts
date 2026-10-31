@@ -52,16 +52,22 @@ export function mapStravaError(code: string, fallback?: string): MappedError {
   }
 }
 
-/** Messages for the `?strava=error&reason=` return URL. */
+/** Messages for the `?strava=error&reason=` return URL (reasons used by functions/_lib/handlers.ts). */
 export function mapReturnReason(reason: string | null): string {
   switch (reason) {
-    case "access_denied": return "You declined access on Strava. You can try again whenever you like.";
+    case "access_denied": return "You cancelled the connection on Strava. You can try again whenever you like.";
+    case "missing_scope":
     case "insufficient_scope":
-    case "scope": return "Strava needs permission to view your activities. Connect again and keep the activity access box ticked.";
+    case "scope": return "Strava needs permission to read your activities. When connecting, keep the 'View data about your activities' box ticked.";
+    case "missing_code": return "Strava did not send back an authorisation code. Please try connecting again.";
+    case "oauth_error": return "Strava reported a problem while connecting. Please try again.";
     case "invalid_state":
-    case "state_expired": return "The connection attempt expired. Please try connecting again.";
-    case "token_exchange":
-    case "exchange_failed": return "Strava did not accept the connection. Please try again.";
+    case "state_invalid":
+    case "state_expired":
+    case "expired_state": return "The connection attempt expired or could not be verified. Please try connecting again.";
+    case "exchange_failed":
+    case "token_exchange": return "Strava did not accept the connection. Please try again.";
+    case "store_failed": return "Strava connected, but we could not save the connection. Please try again.";
     default: return "Could not connect Strava. Please try again.";
   }
 }
@@ -88,6 +94,8 @@ export function lastSyncText(iso: string | null): string {
   return iso ? `Last sync ${formatIst(iso)} IST` : "Not synced yet";
 }
 
+const INFO_CODES = new Set(["busy", "too_many_batches", "rate_limited"]);
+
 export type SyncPhase = "idle" | "syncing" | "waiting" | "error";
 export interface ChipInput {
   connected: boolean;
@@ -104,13 +112,23 @@ export function chipView(c: ChipInput): ChipView | null {
   if (c.phase === "waiting") return { label: `Rate limited, retrying in ${formatCountdown(c.countdownSec)}`, tone: "warn", showRetry: false };
   if (c.phase === "error") {
     const retryable = !c.error || c.error.action === "retry";
-    return { label: retryable ? "Strava sync failed" : c.error!.message, tone: "error", showRetry: retryable };
+    const info = c.error !== null && INFO_CODES.has(c.error.code);
+    return { label: !retryable || info ? c.error!.message : "Strava sync failed", tone: "error", showRetry: retryable };
   }
   return { label: lastSyncText(c.lastSyncAt), tone: "ok", showRetry: false };
 }
 
 export const needsReconnect = (e: MappedError | null) => e?.action === "reconnect";
 export const isConnected = (s: StravaStatus | null) => !!s?.connected;
+
+export const BUSY_WAIT_SEC = 8;
+export const MAX_BUSY_RETRIES = 6;
+
+/** The Worker answers this when another sync holds the lease: `busy: true`, or the bare shape below. */
+export function isBusyResult(r: SyncResult & { busy?: boolean }): boolean {
+  if (r.rateLimited) return false;
+  return r.busy === true || (!r.done && r.processed === 0 && r.remaining === null);
+}
 
 export interface SyncLoopDeps {
   run: (mode?: "initial" | "incremental") => Promise<SyncResult>;
@@ -120,22 +138,36 @@ export interface SyncLoopDeps {
   onProgress: (p: { processed: number; remaining: number | null }) => void;
   onRateLimited: (sec: number) => void;
   onResume: () => void;
+  /** Called after every response from the server (before it is interpreted). */
+  onResponse?: () => void;
   mode?: "initial" | "incremental";
+  busyWaitSec?: number;
+  maxBusyRetries?: number;
 }
-export type SyncOutcome = "done" | "cancelled" | "gave_up";
+export type SyncOutcome = "done" | "cancelled" | "rate_limited" | "busy" | "too_many_batches";
 
-/** Call the sync endpoint until `done`; wait out rate limits (bounded); errors propagate to the caller. */
+/** Call the sync endpoint until `done`; wait out rate limits and busy leases (both bounded); errors propagate to the caller. */
 export async function syncLoop(d: SyncLoopDeps): Promise<{ outcome: SyncOutcome; processed: number }> {
   let processed = 0;
   let retries = 0;
+  let busyRetries = 0;
+  const maxBusy = d.maxBusyRetries ?? MAX_BUSY_RETRIES;
   for (let batch = 0; batch < MAX_BATCHES; batch++) {
     if (d.isCancelled()) return { outcome: "cancelled", processed };
     const r = await d.run(d.mode);
     if (d.isCancelled()) return { outcome: "cancelled", processed };
+    d.onResponse?.();
+    if (isBusyResult(r)) {
+      if (busyRetries >= maxBusy) return { outcome: "busy", processed };
+      busyRetries++;
+      await d.wait(d.busyWaitSec ?? BUSY_WAIT_SEC);
+      if (d.isCancelled()) return { outcome: "cancelled", processed };
+      continue;
+    }
     processed += r.processed;
     d.onProgress({ processed, remaining: r.remaining });
     if (r.rateLimited) {
-      if (retries >= MAX_RATE_LIMIT_RETRIES) return { outcome: "gave_up", processed };
+      if (retries >= MAX_RATE_LIMIT_RETRIES) return { outcome: "rate_limited", processed };
       retries++;
       const sec = clampWaitSec(r.rateLimited.retryAfterSec);
       d.onRateLimited(sec);
@@ -146,5 +178,5 @@ export async function syncLoop(d: SyncLoopDeps): Promise<{ outcome: SyncOutcome;
     }
     if (r.done) return { outcome: "done", processed };
   }
-  return { outcome: "gave_up", processed };
+  return { outcome: "too_many_batches", processed };
 }

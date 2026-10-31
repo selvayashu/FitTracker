@@ -83,18 +83,21 @@ export async function refreshStatus(): Promise<StravaStatus | null> {
   }
 }
 
-export async function syncNow(mode?: "initial" | "incremental"): Promise<void> {
+/** Resolves true when the server actually answered (success or a Worker/Strava error); false for network failures and cancellation. */
+export async function syncNow(mode?: "initial" | "incremental"): Promise<boolean> {
   const uid = userId;
-  if (!uid || snap.phase === "syncing" || snap.phase === "waiting") return;
+  if (!uid || snap.phase === "syncing" || snap.phase === "waiting") return false;
   const my = ++runId;
   const cancelled = () => my !== runId;
-  writeAttempt(uid, Date.now());
+  let responded = false;
+  const markResponded = () => { if (!responded) { responded = true; writeAttempt(uid, Date.now()); } };
   set({ phase: "syncing", processed: 0, remaining: null, retryAtMs: null, error: null });
   try {
     const res = await syncLoop({
       run: runSync,
       mode,
       isCancelled: cancelled,
+      onResponse: markResponded,
       wait: (sec) => new Promise<void>((resolve) => {
         wake = resolve;
         timer = setTimeout(() => { timer = null; wake = null; resolve(); }, sec * 1000);
@@ -103,30 +106,36 @@ export async function syncNow(mode?: "initial" | "incremental"): Promise<void> {
       onRateLimited: (sec) => { if (!cancelled()) set({ phase: "waiting", retryAtMs: Date.now() + sec * 1000 }); },
       onResume: () => { if (!cancelled()) set({ phase: "syncing", retryAtMs: null }); },
     });
-    if (res.outcome === "cancelled") return;
-    if (res.outcome === "gave_up") {
+    if (res.outcome === "cancelled") return responded;
+    if (res.outcome === "rate_limited") {
       set({ phase: "error", retryAtMs: null, error: { code: "rate_limited", action: "retry", message: "Strava is still limiting requests. Try again in a few minutes." } });
+    } else if (res.outcome === "busy") {
+      set({ phase: "error", retryAtMs: null, error: { code: "busy", action: "retry", message: "A sync is already running, try again in a minute." } });
+    } else if (res.outcome === "too_many_batches") {
+      set({ phase: "error", retryAtMs: null, error: { code: "too_many_batches", action: "retry", message: "Still importing... tap Sync now to continue." } });
     } else {
       set({ phase: "idle", retryAtMs: null });
     }
   } catch (e) {
-    if (cancelled()) return;
+    if (cancelled()) return responded;
+    // Any HTTP answer (status > 0) counts as a response; network failures and local auth problems do not.
+    if (e instanceof StravaApiError && e.status > 0 && e.code !== "unauthenticated") markResponded();
     const err = e instanceof StravaApiError ? mapStravaError(e.code, e.message) : mapStravaError("error", e instanceof Error ? e.message : undefined);
     set({ phase: "error", retryAtMs: null, error: err });
   }
-  if (cancelled()) return;
+  if (cancelled()) return responded;
   set({ syncRevision: snap.syncRevision + 1 });
   await refreshStatus();
+  return responded;
 }
 
 /** One incremental sync per app open, at most once per 15 minutes. Never throws, never blocks. */
 export function maybeAutoSync(): void {
   const uid = userId;
   if (!uid || autoDone || !snap.status?.connected) return;
-  autoDone = true;
-  if (shouldAutoSync({ connected: true, lastAttemptMs: readAttempt(uid), nowMs: Date.now() })) {
-    void syncNow(snap.status.last_sync_at ? "incremental" : "initial");
-  }
+  if (!shouldAutoSync({ connected: true, lastAttemptMs: readAttempt(uid), nowMs: Date.now() })) { autoDone = true; return; }
+  // Only a real server answer marks the check as done; a network failure or an unmount lets the next open try again.
+  void syncNow(snap.status.last_sync_at ? "incremental" : "initial").then((responded) => { if (responded && uid === userId) autoDone = true; });
 }
 
 export async function disconnect(deleteActivities: boolean): Promise<string | null> {

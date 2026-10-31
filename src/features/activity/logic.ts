@@ -233,3 +233,21 @@ export function stravaDetails(r: ActivityRow): string[] {
   if (r.max_hr !== null) out.push(`max ${r.max_hr} bpm`);
   return out;
 }
+
+/** Notes text as stored: trimmed, empty becomes null. */
+export const normalizeNotes = (text: string): string | null => (text.trim() === "" ? null : text.trim());
+
+/** Notes edits not yet confirmed by the server, keyed by activity id. */
+export type PendingNotes = Record<string, string | null>;
+
+/** Show pending note edits on top of server rows (the server copy does not have them yet). */
+export function overlayNotes(rows: ActivityRow[], pending: PendingNotes): ActivityRow[] {
+  return rows.map((r) => (Object.prototype.hasOwnProperty.call(pending, r.id) ? { ...r, notes: pending[r.id] } : r));
+}
+
+/** Drop the pending entries for ids in `done`. */
+export function withoutPending(pending: PendingNotes, done: Iterable<string>): PendingNotes {
+  const next = { ...pending };
+  for (const id of done) delete next[id];
+  return next;
+}

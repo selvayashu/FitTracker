@@ -10,7 +10,7 @@ import {
   buildActivityRow, emptyForm, estimateKcal, hasErrors, isOther, rowToForm, templateFromForm, validateForm,
   type ActivityFormValues, type ActivityPrefill, type FormErrors,
 } from "./logic";
-import { hydrate, loadTypes, saveActivity, saveTemplate, useActivityStore } from "./store";
+import { hydrate, loadTypes, saveActivity, saveStravaNotes, saveTemplate, useActivityStore } from "./store";
 
 export interface AddActivitySheetProps {
   onClose: () => void;
@@ -68,9 +68,7 @@ export function AddActivitySheet({ onClose, prefill, editing }: AddActivitySheet
     if (!user) return;
     if (readOnly && editing) {
       setSaving(true);
-      const { created_at: _c, updated_at: _u, ...rest } = editing;
-      void _c; void _u;
-      await saveActivity({ ...rest, notes: form.notes.trim() === "" ? null : form.notes.trim() });
+      await saveStravaNotes(editing.id, form.notes);
       onClose();
       return;
     }

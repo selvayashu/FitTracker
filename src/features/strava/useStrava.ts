@@ -13,7 +13,8 @@ export interface UseStrava extends StravaSnapshot {
   /** Seconds until the rate-limit retry (0 when not waiting). Re-renders every second while waiting. */
   countdownSec: number;
   refresh: () => Promise<void>;
-  syncNow: (mode?: "initial" | "incremental") => Promise<void>;
+  /** Resolves true once the server has answered. */
+  syncNow: (mode?: "initial" | "incremental") => Promise<boolean>;
   disconnect: (deleteActivities: boolean) => Promise<string | null>;
 }
 
@@ -58,8 +59,8 @@ export function useStrava({ enabled, autoSync = false }: { enabled: boolean; aut
 
   const refresh = useCallback(async () => { await refreshStatus(); }, []);
   const syncNow = useCallback(async (mode?: "initial" | "incremental") => {
-    if (!enabled) return;
-    await storeSyncNow(mode ?? (getSnapshot().status?.last_sync_at ? "incremental" : "initial"));
+    if (!enabled) return false;
+    return storeSyncNow(mode ?? (getSnapshot().status?.last_sync_at ? "incremental" : "initial"));
   }, [enabled]);
 
   return {

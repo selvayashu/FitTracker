@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityRow, ActivityTypeRow } from "@/lib/database.types";
 import {
-  buildActivityRow, cloneForRepeat, daySummary, emptyForm, estimateKcal, groupByIstDate, mergeActivities, rowToForm, stravaDetails, stravaTitle,
+  buildActivityRow, cloneForRepeat, daySummary, emptyForm, estimateKcal, groupByIstDate, mergeActivities, normalizeNotes, overlayNotes, withoutPending, rowToForm, stravaDetails, stravaTitle,
   templateFromForm, templateFromRow, templateToPrefill, validateForm, type ActivityFormValues,
 } from "./logic";
 
@@ -181,4 +181,16 @@ describe("strava display", () => {
     expect(stravaDetails(row({ elevation_m: 120.4, suffer_score: 33 }))).toEqual(["120 m elevation", "suffer score 33", "avg 150 bpm", "max 170 bpm"]);
     expect(stravaDetails(row({ avg_hr: null, max_hr: null }))).toEqual([]);
   });
+});
+
+describe("pending notes", () => {
+  it("normalises", () => {
+    expect(normalizeNotes("  hi ")).toBe("hi");
+    expect(normalizeNotes("   ")).toBeNull();
+  });
+  it("overlays only rows with a pending edit (including clearing to null)", () => {
+    const out = overlayNotes([row({ id: "a", notes: "old" }), row({ id: "b", notes: "keep" })], { a: null });
+    expect(out.map((r) => r.notes)).toEqual([null, "keep"]);
+  });
+  it("removes finished ids", () => expect(withoutPending({ a: "x", b: "y" }, ["a"])).toEqual({ b: "y" }));
 });
