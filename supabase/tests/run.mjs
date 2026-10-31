@@ -210,6 +210,99 @@ await as(A, async () => {
 ok("all deleted: no summaries left", (await db.query(`select 1 from daily_summaries where user_id='${A}'`)).rows.length === 0);
 ok("B summary unaffected", (await db.query(`select 1 from daily_summaries where user_id='${B}'`)).rows.length === 1);
 
+// ---- Phase 2 (0006_strava)
+console.log("Phase 2: strava");
+const anonFails = async (sql) => { await db.exec(`set role anon`); try { await db.query(sql); return null; } catch (e) { return e.message; } finally { await db.exec(`reset role`); } };
+// (a) strava_connections locked down
+await db.exec(`insert into strava_connections (user_id, athlete_id, access_token, refresh_token, expires_at, scope, last_sync_at)
+  values ('${B}', 4242, 'secret-access', 'secret-refresh', now() + interval '1 hour', 'read,activity:read_all', '2026-05-01T00:00:00Z')`);
+ok("superuser can read strava_connections", (await db.query(`select * from strava_connections`)).rows.length === 1);
+for (const [label, sql] of [
+  ["select", `select * from strava_connections`],
+  ["select B's tokens", `select access_token from strava_connections where user_id = '${B}'`],
+  ["insert own", `insert into strava_connections (user_id, athlete_id, access_token, refresh_token, expires_at) values ('${A}', 1, 'a', 'b', now())`],
+  ["insert as other", `insert into strava_connections (user_id, athlete_id, access_token, refresh_token, expires_at) values ('${B}', 2, 'a', 'b', now())`],
+  ["update", `update strava_connections set scope = 'x'`],
+  ["delete", `delete from strava_connections`],
+]) {
+  ok(`strava_connections: authenticated ${label} denied`, (await fails(A, sql)) !== null);
+  ok(`strava_connections: anon ${label} denied`, (await anonFails(sql)) !== null);
+}
+ok("strava_connections: row intact", (await db.query(`select 1 from strava_connections`)).rows.length === 1);
+ok("strava_connections: RLS enabled+forced, no policies",
+  (await db.query(`select relrowsecurity r, relforcerowsecurity f, (select count(*)::int from pg_policies where tablename='strava_connections') p from pg_class where relname='strava_connections'`)).rows
+    .every((r) => r.r && r.f && r.p === 0));
+// (b) strava_status
+const stA = await rowsAs(A, `select * from strava_status()`);
+ok("strava_status: no connection -> one row connected=false, nulls", stA.length === 1 && stA[0].connected === false && stA[0].athlete_id === null && stA[0].last_sync_at === null && stA[0].scope === null);
+const stB = await rowsAs(B, `select * from strava_status()`);
+ok("strava_status: connected row", stB.length === 1 && stB[0].connected === true && Number(stB[0].athlete_id) === 4242 && new Date(stB[0].last_sync_at).toISOString() === "2026-05-01T00:00:00.000Z" && stB[0].scope === "read,activity:read_all");
+ok("strava_status: columns exactly connected,athlete_id,last_sync_at,scope, no tokens",
+  JSON.stringify(Object.keys(stB[0])) === JSON.stringify(["connected", "athlete_id", "last_sync_at", "scope"]) && !JSON.stringify(stB).includes("secret"));
+ok("strava_status: anon cannot execute", /permission/i.test((await anonFails(`select * from strava_status()`)) ?? ""));
+// (c) activity_hr_zones
+await db.exec(`insert into activities (id,user_id,activity_type_id,start_time,duration_min) values
+  ('a2000000-0000-0000-0000-00000000000a','${A}',1,'2026-04-01T05:00:00Z',30),
+  ('b2000000-0000-0000-0000-00000000000b','${B}',1,'2026-04-01T05:00:00Z',30)`);
+await db.exec(`insert into activity_hr_zones (activity_id,user_id,zone1_s,max_hr_used) values ('b2000000-0000-0000-0000-00000000000b','${B}',60,190)`);
+ok("zones: A cannot select B", (await rowsAs(A, `select * from activity_hr_zones`)).length === 0);
+ok("zones: B sees own", (await rowsAs(B, `select * from activity_hr_zones`)).length === 1);
+ok("zones: A cannot update B", (await as(A, () => db.query(`update activity_hr_zones set zone1_s = 1 returning 1`))).rows.length === 0);
+ok("zones: A cannot delete B", (await as(A, () => db.query(`delete from activity_hr_zones returning 1`))).rows.length === 0);
+ok("zones: A cannot insert as B", /row-level/i.test(await fails(A, `insert into activity_hr_zones (activity_id,user_id,max_hr_used) values ('a2000000-0000-0000-0000-00000000000a','${B}',190)`) ?? ""));
+ok("zones: A cannot attach zone to B's activity (even as self)", /row-level/i.test(await fails(A, `insert into activity_hr_zones (activity_id,user_id,max_hr_used) values ('b2000000-0000-0000-0000-00000000000b','${A}',190)`) ?? ""));
+ok("zones: A can insert own", (await fails(A, `insert into activity_hr_zones (activity_id,user_id,zone2_s,max_hr_used) values ('a2000000-0000-0000-0000-00000000000a','${A}',120,185)`)) === null);
+ok("zones: A cannot repoint own zone row to B's activity", (await fails(A, `update activity_hr_zones set activity_id = 'b2000000-0000-0000-0000-00000000000b' where user_id = '${A}'`)) !== null);
+ok("zones: negative seconds rejected", /check/i.test(await fails(A, `update activity_hr_zones set zone3_s = -1`) ?? ""));
+ok("zones: anon denied", (await anonFails(`select * from activity_hr_zones`)) !== null);
+await as(A, () => db.query(`delete from activities where id='a2000000-0000-0000-0000-00000000000a'`));
+ok("zones: cascade on activity delete", (await db.query(`select 1 from activity_hr_zones where user_id='${A}'`)).rows.length === 0);
+await db.exec(`delete from activities where id = 'b2000000-0000-0000-0000-00000000000b'`);
+// (d) duplicate_of FK
+await db.exec(`insert into activities (id,user_id,activity_type_id,start_time,duration_min,source) values
+  ('a3000000-0000-0000-0000-000000000001','${A}',1,'2026-04-02T05:00:00Z',30,'manual')`);
+await db.exec(`insert into activities (id,user_id,activity_type_id,start_time,duration_min,source,strava_id,duplicate_of) values
+  ('a3000000-0000-0000-0000-000000000002','${A}',1,'2026-04-02T05:05:00Z',30,'strava',777,'a3000000-0000-0000-0000-000000000001')`);
+ok("duplicate_of FK rejects unknown id", /foreign key/i.test(await fails(A, `update activities set duplicate_of = 'a3999999-0000-0000-0000-000000000009' where id='a3000000-0000-0000-0000-000000000002'`) ?? ""));
+await as(A, () => db.query(`delete from activities where id='a3000000-0000-0000-0000-000000000001'`));
+ok("deleting manual row nulls strava duplicate_of", (await db.query(`select duplicate_of from activities where id='a3000000-0000-0000-0000-000000000002'`)).rows[0].duplicate_of === null);
+ok("duplicate_of FK exists exactly once", (await db.query(`select count(*)::int c from pg_constraint where conrelid='activities'::regclass and contype='f' and confrelid='activities'::regclass`)).rows[0].c === 1);
+// (e) excluded ignored by daily_summaries
+const sum4 = async () => (await db.query(`select * from daily_summaries where user_id='${A}' and date='2026-04-02'`)).rows[0];
+await db.exec(`update activities set calories = 200 where id='a3000000-0000-0000-0000-000000000002'`);
+let s4 = await sum4();
+ok("strava activity counted: 200 kcal, 30 min, 1 workout", s4 && Number(s4.kcal_active) === 200 && Number(s4.active_minutes) === 30 && s4.workouts === 1);
+await as(A, () => db.query(`update activities set excluded = true where id='a3000000-0000-0000-0000-000000000002'`));
+ok("excluded=true: day summary removed", (await sum4()) === undefined);
+await db.exec(`insert into activities (user_id,activity_type_id,start_time,duration_min,calories) values ('${A}',1,'2026-04-02T06:00:00Z',10,50)`);
+s4 = await sum4();
+ok("excluded row ignored beside a normal one: 50 kcal / 1 workout", Number(s4.kcal_active) === 50 && s4.workouts === 1);
+await as(A, () => db.query(`update activities set excluded = false where id='a3000000-0000-0000-0000-000000000002'`));
+s4 = await sum4();
+ok("excluded=false: totals return (250 kcal, 40 min, 2 workouts)", Number(s4.kcal_active) === 250 && Number(s4.active_minutes) === 40 && s4.workouts === 2);
+await as(A, () => db.query(`delete from activities where user_id='${A}'`));
+ok("delete: summary gone", (await sum4()) === undefined);
+// (f) new CHECKs
+const ac = (col, v) => `insert into activities (user_id,activity_type_id,start_time,duration_min,${col}) values ('${A}',1,now(),10,${v})`;
+for (const col of ["elevation_m", "suffer_score", "moving_time_s", "elapsed_time_s"]) {
+  ok(`${col} -1 rejected`, /check/i.test(await fails(A, ac(col, -1)) ?? ""));
+  ok(`${col} 0 accepted`, (await fails(A, ac(col, 0))) === null);
+}
+ok("excluded/duplicate_dismissed default false", (await db.query(`select bool_or(excluded) e, bool_or(duplicate_dismissed) d from activities where user_id='${A}'`)).rows[0].e === false);
+ok("excluded null rejected", /null/i.test(await fails(A, `update activities set excluded = null`) ?? ""));
+await db.exec(`delete from activities where user_id='${A}'`);
+// (h) strava_id uniqueness across users
+await db.exec(`insert into activities (user_id,activity_type_id,start_time,duration_min,strava_id) values ('${A}',1,now(),10,9001)`);
+ok("strava_id unique across users", /unique|duplicate/i.test(await fails(B, `insert into activities (user_id,activity_type_id,start_time,duration_min,strava_id) values ('${B}',1,now(),10,9001)`) ?? ""));
+await db.exec(`delete from activities where user_id='${A}'`);
+// (g) all migrations once more with data present
+for (const f of fs.readdirSync(migDir).filter((f) => f.endsWith(".sql")).sort()) {
+  await db.exec(fs.readFileSync(path.join(migDir, f), "utf8"));
+}
+ok("migrations re-run cleanly a third time with data present", (await db.query(`select 1 from strava_connections`)).rows.length === 1);
+ok("activities_summary trigger still single", (await db.query(`select count(*)::int c from pg_trigger where tgname='activities_summary'`)).rows[0].c === 1);
+await db.exec(`delete from strava_connections`);
+
 // ---- (f) seeds
 console.log("seeds");
 const nAt = (await db.query(`select count(*)::int c from activity_types`)).rows[0].c;
