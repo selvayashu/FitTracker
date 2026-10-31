@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FitTrack: Implementation Plan</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a2230; --muted: #5b6678; --card: #f5f7fa; --line: #d8dee8;
+    --accent: #0f766e; --accent2: #b45309; --box: #e6f4f1; --box2: #fdf1e0; --box3: #e8eefb; --box4: #f3e8fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11161d; --fg: #e6ebf2; --muted: #98a3b5; --card: #1a212b; --line: #2d3746;
+      --accent: #2dd4bf; --accent2: #fbbf24; --box: #14312e; --box2: #3a2d14; --box3: #1c2a4a; --box4: #33214a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 2rem; margin: 0 0 4px; }
+  h2 { margin: 48px 0 12px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 1.4rem; }
+  h3 { margin: 24px 0 8px; font-size: 1.05rem; }
+  p.sub { color: var(--muted); margin: 0 0 16px; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 16px 0; font-size: .9rem; }
+  nav a { color: var(--accent); text-decoration: none; }
+  nav a:hover { text-decoration: underline; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: .92rem; }
+  th, td { text-align: left; padding: 8px 10px; border: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--card); }
+  code { background: var(--card); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
+  pre { background: var(--card); padding: 14px; border-radius: 8px; overflow-x: auto; font-size: .85rem; line-height: 1.45; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .tag { display: inline-block; font-size: .75rem; padding: 1px 8px; border-radius: 99px; background: var(--box); color: var(--accent); border: 1px solid var(--line); }
+  figure { margin: 16px 0; }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: 4px; }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { fill: var(--fg); font-family: system-ui, sans-serif; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  svg .t { font-size: 13px; font-weight: 600; }
+  svg .b { stroke: var(--line); stroke-width: 1.5; }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.6; fill: none; marker-end: url(#ah); }
+  svg .arrow2 { stroke: var(--accent2); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; marker-end: url(#ah2); }
+  .note { border-left: 4px solid var(--accent2); padding: 8px 14px; background: var(--card); border-radius: 0 8px 8px 0; }
+  ul { padding-left: 22px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>FitTrack: Implementation Plan</h1>
+<p class="sub">Personal health tracker PWA &middot; React + Vite + TypeScript &middot; Supabase &middot; Cloudflare &middot; Strava</p>
+
+<nav>
+  <a href="#overview">Overview</a>
+  <a href="#architecture">Architecture</a>
+  <a href="#data">Data model</a>
+  <a href="#design">Design details</a>
+  <a href="#strava">Strava flow</a>
+  <a href="#phases">Phases</a>
+  <a href="#agents">Subagent execution</a>
+  <a href="#risks">Risks</a>
+  <a href="#setup">Accounts needed</a>
+</nav>
+
+<h2 id="overview">1. Overview</h2>
+<p>FitTrack records exercise (from Strava or entered manually), weight and meals. It computes BMI and a daily calorie allowance and produces reports on calories in versus calories out. It must be fully usable without Strava, work offline for meal and activity entry, and stay on free tiers.</p>
+<div class="grid">
+  <div class="card"><strong>Frontend</strong><br>React, Vite, TypeScript, Tailwind, Recharts, <code>vite-plugin-pwa</code></div>
+  <div class="card"><strong>Edge / hosting</strong><br>Cloudflare Pages plus Pages Functions / Workers for all secret-bearing logic</div>
+  <div class="card"><strong>Backend</strong><br>Supabase: Postgres, Auth, Row Level Security, cron, Edge Functions if needed</div>
+  <div class="card"><strong>Delivery</strong><br>GitHub repo, auto-deploy to Cloudflare Pages, four testable phases</div>
+</div>
+
+<h2 id="architecture">2. Architecture</h2>
+<figure>
+<svg viewBox="0 0 940 520" role="img" aria-label="System architecture diagram">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a94a6"/></marker>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d98a1c"/></marker>
+  </defs>
+
+  <!-- Browser -->
+  <rect class="b" x="20" y="150" width="250" height="230" rx="12" style="fill:var(--box)"/>
+  <text class="t" x="36" y="176">Browser / Installed PWA</text>
+  <text class="small" x="36" y="196">React + Tailwind + Recharts</text>
+  <rect class="b" x="36" y="208" width="218" height="34" rx="6" style="fill:var(--bg)"/><text x="46" y="230" font-size="12">Screens: Today, Meals, Activity, Reports</text>
+  <rect class="b" x="36" y="250" width="218" height="34" rx="6" style="fill:var(--bg)"/><text x="46" y="272" font-size="12">@fittrack/shared (calc module)</text>
+  <rect class="b" x="36" y="292" width="218" height="34" rx="6" style="fill:var(--bg)"/><text x="46" y="314" font-size="12">Service worker + offline cache</text>
+  <rect class="b" x="36" y="334" width="218" height="34" rx="6" style="fill:var(--bg)"/><text x="46" y="356" font-size="12">IndexedDB outbox (idempotent)</text>
+
+  <!-- Cloudflare -->
+  <rect class="b" x="350" y="40" width="250" height="200" rx="12" style="fill:var(--box2)"/>
+  <text class="t" x="366" y="66">Cloudflare</text>
+  <text class="small" x="366" y="84">Pages (static) + Functions / Workers</text>
+  <rect class="b" x="366" y="96" width="218" height="30" rx="6" style="fill:var(--bg)"/><text x="376" y="116" font-size="12">/api/strava/callback (OAuth)</text>
+  <rect class="b" x="366" y="132" width="218" height="30" rx="6" style="fill:var(--bg)"/><text x="376" y="152" font-size="12">/api/strava/webhook</text>
+  <rect class="b" x="366" y="168" width="218" height="30" rx="6" style="fill:var(--bg)"/><text x="376" y="188" font-size="12">Sync + token refresh + 429 queue</text>
+  <text class="small" x="366" y="224">Secrets: STRAVA_CLIENT_SECRET, service key</text>
+
+  <!-- Supabase -->
+  <rect class="b" x="350" y="290" width="250" height="200" rx="12" style="fill:var(--box3)"/>
+  <text class="t" x="366" y="316">Supabase</text>
+  <text class="small" x="366" y="334">RLS: user_id = auth.uid() on every table</text>
+  <rect class="b" x="366" y="346" width="218" height="30" rx="6" style="fill:var(--bg)"/><text x="376" y="366" font-size="12">Auth (email + Google)</text>
+  <rect class="b" x="366" y="382" width="218" height="30" rx="6" style="fill:var(--bg)"/><text x="376" y="402" font-size="12">Postgres (profiles, meals, activities...)</text>
+  <rect class="b" x="366" y="418" width="218" height="30" rx="6" style="fill:var(--bg)"/><text x="376" y="438" font-size="12">Cron: daily_summaries, weekly email</text>
+
+  <!-- External -->
+  <rect class="b" x="700" y="40" width="220" height="90" rx="12" style="fill:var(--box4)"/>
+  <text class="t" x="716" y="66">Strava API</text>
+  <text class="small" x="716" y="86">OAuth, activities, HR streams,</text>
+  <text class="small" x="716" y="102">webhook events</text>
+
+  <rect class="b" x="700" y="190" width="220" height="70" rx="12" style="fill:var(--box4)"/>
+  <text class="t" x="716" y="216">Open Food Facts</text>
+  <text class="small" x="716" y="236">Packaged-food fallback search</text>
+
+  <rect class="b" x="700" y="340" width="220" height="70" rx="12" style="fill:var(--box4)"/>
+  <text class="t" x="716" y="366">Resend</text>
+  <text class="small" x="716" y="386">Weekly summary email</text>
+
+  <!-- Arrows -->
+  <path class="arrow" d="M270 200 L350 160"/>             <!-- browser -> CF -->
+  <text class="small" x="276" y="168">HTTPS</text>
+  <path class="arrow" d="M270 330 L350 380"/>             <!-- browser -> supabase -->
+  <text class="small" x="272" y="372">anon key + JWT</text>
+  <path class="arrow" d="M600 130 L700 85"/>              <!-- CF -> Strava -->
+  <path class="arrow2" d="M700 110 L600 150"/>            <!-- Strava webhook -> CF -->
+  <text class="small" x="636" y="92">tokens, sync</text>
+  <path class="arrow" d="M475 240 L475 290"/>             <!-- CF -> Supabase -->
+  <text class="small" x="482" y="268">service role</text>
+  <path class="arrow" d="M270 250 C 400 262, 600 232, 700 225"/> <!-- browser -> OFF -->
+  <path class="arrow" d="M600 435 L700 385"/>             <!-- supabase -> resend -->
+</svg>
+<figcaption>Solid arrows are requests. The dashed arrow is Strava pushing webhook events. The browser never sees the Strava client secret or the Supabase service key.</figcaption>
+</figure>
+
+<h3>Responsibilities by layer</h3>
+<table>
+  <tr><th>Layer</th><th>Owns</th><th>Must not</th></tr>
+  <tr><td>Browser</td><td>UI, form validation, offline queue, calculations via shared module</td><td>Hold any secret except the Supabase anon key</td></tr>
+  <tr><td>Cloudflare Functions</td><td>Strava OAuth exchange, token refresh, webhook receiver, sync with rate-limit queue</td><td>Trust a request without verifying the user JWT or the webhook verify token</td></tr>
+  <tr><td>Supabase</td><td>Identity, storage, RLS, scheduled summaries and email trigger</td><td>Contain calculation logic that differs from the shared module</td></tr>
+</table>
+
+<h3>Proposed folder structure</h3>
+<pre>FitTracker/
+  src/                      React app
+    features/               auth, profile, meals, activity, dashboard, reports, settings
+    components/  hooks/  lib/   (supabase client, outbox, formatters)
+  packages/shared/          BMI, BMR, TDEE, targets, macros, MET kcal + Vitest tests
+  functions/api/strava/     callback.ts, webhook.ts, sync.ts, refresh.ts
+  supabase/migrations/      0001_core.sql ... seeds, RLS, indexes
+  public/                   manifest, icons
+  docs/                     this plan
+  .env.example   README.md</pre>
+
+<h2 id="data">3. Data model</h2>
+<figure>
+<svg viewBox="0 0 940 330" role="img" aria-label="Entity relationship overview">
+  <defs><marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a94a6"/></marker></defs>
+  <style>.e{stroke:var(--line);stroke-width:1.5}.l{stroke:#8a94a6;stroke-width:1.4;marker-end:url(#ah3)}</style>
+
+  <rect class="e" x="20" y="20" width="170" height="70" rx="8" style="fill:var(--box3)"/><text class="t" x="32" y="44">auth.users</text><text class="small" x="32" y="64">Supabase identity</text>
+  <rect class="e" x="250" y="20" width="200" height="70" rx="8" style="fill:var(--box)"/><text class="t" x="262" y="44">profiles</text><text class="small" x="262" y="64">targets, bmi, bmr, tdee, max_hr</text>
+  <rect class="e" x="510" y="20" width="170" height="70" rx="8" style="fill:var(--box)"/><text class="t" x="522" y="44">weight_logs</text><text class="small" x="522" y="64">date, weight_kg, bmi</text>
+  <rect class="e" x="740" y="20" width="180" height="70" rx="8" style="fill:var(--box2)"/><text class="t" x="752" y="44">strava_connections</text><text class="small" x="752" y="64">tokens, expires_at (RLS)</text>
+
+  <rect class="e" x="20" y="150" width="200" height="70" rx="8" style="fill:var(--box4)"/><text class="t" x="32" y="174">activity_types</text><text class="small" x="32" y="194">read-only, MET light/mod/vig</text>
+  <rect class="e" x="270" y="150" width="210" height="70" rx="8" style="fill:var(--box)"/><text class="t" x="282" y="174">activities</text><text class="small" x="282" y="194">source, strava_id, calories_estimated</text>
+  <rect class="e" x="540" y="150" width="190" height="70" rx="8" style="fill:var(--box)"/><text class="t" x="552" y="174">activity_hr_zones</text><text class="small" x="552" y="194">seconds in zones 1-5</text>
+  <rect class="e" x="770" y="150" width="150" height="70" rx="8" style="fill:var(--box)"/><text class="t" x="782" y="174">activity_templates</text><text class="small" x="782" y="194">saved quick-adds</text>
+
+  <rect class="e" x="20" y="260" width="170" height="56" rx="8" style="fill:var(--box4)"/><text class="t" x="32" y="284">foods</text><text class="small" x="32" y="302">~300 seeded, per 100 g</text>
+  <rect class="e" x="230" y="260" width="170" height="56" rx="8" style="fill:var(--box)"/><text class="t" x="242" y="284">custom_foods</text><text class="small" x="242" y="302">per user</text>
+  <rect class="e" x="440" y="260" width="190" height="56" rx="8" style="fill:var(--box)"/><text class="t" x="452" y="284">meal_entries</text><text class="small" x="452" y="302">date, slot, qty, kcal, macros</text>
+  <rect class="e" x="670" y="260" width="120" height="56" rx="8" style="fill:var(--box)"/><text class="t" x="682" y="284">favourite_meals</text>
+  <rect class="e" x="810" y="260" width="110" height="56" rx="8" style="fill:var(--box3)"/><text class="t" x="822" y="284">daily_summaries</text>
+
+  <path class="l" d="M190 55 L250 55"/>
+  <path class="l" d="M450 55 L510 55"/>
+  <path class="l" d="M190 40 C 600 -5, 700 -5, 740 40"/>
+  <path class="l" d="M220 185 L270 185"/>
+  <path class="l" d="M480 185 L540 185"/>
+  <path class="l" d="M190 288 L230 288"/>
+  <path class="l" d="M400 288 L440 288"/>
+  <path class="l" d="M520 260 L420 220"/>
+</svg>
+<figcaption>Every user-owned table carries <code>user_id</code> and the policy <code>user_id = auth.uid()</code>. <code>activity_types</code> and <code>foods</code> are readable by all signed-in users and not writable.</figcaption>
+</figure>
+
+<h3>Key constraints and indexes</h3>
+<ul>
+  <li><code>activities.strava_id</code> unique where not null; index on <code>(user_id, start_time)</code> for reports and duplicate checks.</li>
+  <li><code>meal_entries</code> index on <code>(user_id, date, meal_type)</code>.</li>
+  <li>CHECK constraints: duration 1-600, HR 40-220, quantity &gt; 0, weight and height in sane ranges.</li>
+  <li>Client-generated UUID primary keys so offline writes are idempotent on retry.</li>
+  <li><code>daily_summaries</code> refreshed by trigger on meal and activity changes, with a nightly cron backstop.</li>
+</ul>
+
+<h2 id="design">4. Design details</h2>
+
+<h3>4.1 Calculation module (<code>packages/shared</code>)</h3>
+<p>Pure TypeScript with no framework imports. Used by the UI and the Workers, with Vitest boundary tests.</p>
+<table>
+  <tr><th>Function</th><th>Rule</th></tr>
+  <tr><td><code>bmi</code></td><td>kg / m&sup2;, 1 decimal. Categories: Asian &lt;18.5, 18.5-22.9, 23-24.9, &ge;25. WHO option 25 / 30.</td></tr>
+  <tr><td><code>healthyRange</code></td><td>Weights giving BMI 18.5 to 22.9 at the user's height.</td></tr>
+  <tr><td><code>bmr</code></td><td>Mifflin-St Jeor: 10w + 6.25h &minus; 5a, then +5 (male) or &minus;161 (female).</td></tr>
+  <tr><td><code>tdee</code></td><td>BMR &times; 1.2 / 1.375 / 1.55 / 1.725 / 1.9.</td></tr>
+  <tr><td><code>calorieTarget</code></td><td>TDEE &plusmn; 275 or 550. Floor = max(BMR, 1200 F / 1500 M); returns a warning flag when the floor applies.</td></tr>
+  <tr><td><code>dayAllowance</code></td><td>Target + addback% &times; exercise kcal (default 50%).</td></tr>
+  <tr><td><code>macros</code></td><td>Protein 1.2-1.6 g/kg, fat 25-30% kcal, carbs remainder (4/4/9 kcal per g).</td></tr>
+  <tr><td><code>metKcal</code></td><td>MET &times; kg &times; hours; result flagged <em>estimated</em>.</td></tr>
+  <tr><td><code>etaToTarget</code></td><td>Remaining kg / pace per week, from 7,700 kcal &asymp; 1 kg.</td></tr>
+  <tr><td><code>hrZones</code></td><td>Zones 1-5 from % of max HR (default 220 &minus; age, editable).</td></tr>
+</table>
+
+<h3>4.2 Security</h3>
+<ul>
+  <li>RLS on every table, with policy tests that try cross-user reads and writes and expect failure.</li>
+  <li>The Strava client secret, webhook verify token, Resend key and Supabase service key exist only as Worker or Function secrets.</li>
+  <li>Worker endpoints verify the Supabase JWT. The webhook verifies the subscription token and looks up the user by Strava athlete ID.</li>
+  <li>OAuth <code>state</code> parameter ties the callback to the initiating user and prevents CSRF.</li>
+</ul>
+
+<h3>4.3 Offline and sync</h3>
+<ul>
+  <li>The service worker precaches the app shell and caches food search results.</li>
+  <li>Meal and activity writes go to an IndexedDB outbox first, then replay on reconnect. UUIDs make replays safe.</li>
+  <li>The UI shows a pending-sync indicator. Conflicts are last-write-wins on manual rows, and Strava rows are read-only except notes.</li>
+</ul>
+
+<h3>4.4 Time</h3>
+<p>All timestamps are stored as UTC <code>timestamptz</code>. Display and "what counts as today" use <code>Asia/Kolkata</code>, so a day boundary is midnight IST.</p>
+
+<h3>4.5 UI structure</h3>
+<table>
+  <tr><th>Screen</th><th>Key content</th></tr>
+  <tr><td>Onboarding</td><td>Profile form, tracking mode choice (Strava or manual)</td></tr>
+  <tr><td>Today</td><td>Calories remaining, consumed/target/burned/net, macro donut, BMI card, meal cards, Add Activity button, Strava badge</td></tr>
+  <tr><td>Meals</td><td>Four slots, food search, quantity and unit picker, favourites, copy yesterday</td></tr>
+  <tr><td>Activity</td><td>List, add/edit form, templates, duplicate review</td></tr>
+  <tr><td>Reports</td><td>Range picker, in-vs-out bars, net trend, HR zones, macros, weight/BMI trend, insights, PDF/CSV export</td></tr>
+  <tr><td>Settings</td><td>Profile, BMI standard, add-back %, max HR, Strava connect/disconnect, tracking mode</td></tr>
+</table>
+<p>Mobile-first layout with a bottom tab bar, dark mode via Tailwind, and loading, error and empty states on every screen. A disclaimer states that BMI and calorie figures are estimates and not medical advice.</p>
+
+<h2 id="strava">5. Strava integration flow</h2>
+<figure>
+<svg viewBox="0 0 940 270" role="img" aria-label="Strava sequence">
+  <defs><marker id="ah4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a94a6"/></marker></defs>
+  <style>.s{stroke:#8a94a6;stroke-width:1.5;marker-end:url(#ah4)}.ll{stroke:var(--line);stroke-width:1.2;stroke-dasharray:4 4}</style>
+  <text class="t" x="50" y="24">Browser</text><text class="t" x="290" y="24">Worker</text><text class="t" x="530" y="24">Strava</text><text class="t" x="760" y="24">Supabase</text>
+  <line class="ll" x1="80" y1="34" x2="80" y2="260"/><line class="ll" x1="320" y1="34" x2="320" y2="260"/><line class="ll" x1="560" y1="34" x2="560" y2="260"/><line class="ll" x1="800" y1="34" x2="800" y2="260"/>
+  <path class="s" d="M80 56 L560 56"/><text class="small" x="150" y="50">1 redirect to authorize (scopes read, activity:read_all)</text>
+  <path class="s" d="M560 82 L320 82"/><text class="small" x="360" y="76">2 callback with code + state</text>
+  <path class="s" d="M320 108 L560 108"/><text class="small" x="350" y="102">3 exchange code (client secret)</text>
+  <path class="s" d="M320 134 L800 134"/><text class="small" x="420" y="128">4 store tokens (RLS table), enqueue 90-day sync</text>
+  <path class="s" d="M320 160 L560 160"/><text class="small" x="350" y="154">5 list + detail + HR streams (queue, back off on 429)</text>
+  <path class="s" d="M320 186 L800 186"/><text class="small" x="440" y="180">6 upsert activities + hr zones, flag duplicates</text>
+  <path class="s" d="M560 216 L320 216"/><text class="small" x="360" y="210">7 webhook: new / updated activity</text>
+  <path class="s" d="M320 242 L800 242"/><text class="small" x="440" y="236">8 refresh token if near expiry, re-sync that activity</text>
+</svg>
+<figcaption>Disconnect calls Strava's deauthorize endpoint and deletes the stored tokens. Synced activities remain unless the user opts to delete them.</figcaption>
+</figure>
+
+<h2 id="phases">6. Phases and deliverables</h2>
+<table>
+  <tr><th>Phase</th><th>Scope</th><th>You test</th></tr>
+  <tr><td><strong>1</strong></td><td>Auth, profile, BMI and calorie target, weight log, meal logging, manual activity entry. Migrations, seeds, shared module and tests.</td><td>Sign up, set profile, see BMI/target, log meals and a manual workout, go offline and back.</td></tr>
+  <tr><td><strong>2</strong></td><td>Strava connect, 90-day sync, webhook, HR zones, duplicate handling, disconnect.</td><td>Connect, see activities arrive, resolve a duplicate, disconnect.</td></tr>
+  <tr><td><strong>3</strong></td><td>Today dashboard and Reports with charts and insights.</td><td>Compare dashboard totals with raw entries, try each report range.</td></tr>
+  <tr><td><strong>4</strong></td><td>PWA polish, PDF/CSV export, weekly email, README completion.</td><td>Install on phone, export files, receive the weekly email.</td></tr>
+</table>
+<p class="note">Each phase ends with a type-check, lint and unit-test run, a summary, and a test checklist. I then stop until you approve the next phase.</p>
+
+<h2 id="agents">7. Subagent execution and monitoring</h2>
+<figure>
+<svg viewBox="0 0 940 330" role="img" aria-label="Subagent timeline for phase 1">
+  <style>.g{stroke:var(--line);stroke-width:1.2}</style>
+  <text class="t" x="20" y="22">Step 0: Orchestrator scaffolds repo, types and schema contract</text>
+  <rect class="g" x="20" y="34" width="900" height="30" rx="6" style="fill:var(--box2)"/><text x="32" y="54" font-size="12">Vite + Tailwind + monorepo, DB row types, table contract, file ownership map</text>
+
+  <text class="t" x="20" y="92">Step 1: parallel foundations</text>
+  <rect class="g" x="20" y="102" width="440" height="34" rx="6" style="fill:var(--box)"/><text x="32" y="124" font-size="12">DB agent: migrations, RLS, indexes, seeds, RLS tests</text>
+  <rect class="g" x="480" y="102" width="440" height="34" rx="6" style="fill:var(--box)"/><text x="492" y="124" font-size="12">Shared agent: calc module + boundary tests</text>
+
+  <text class="t" x="20" y="164">Step 2: parallel features (after step 1 merges)</text>
+  <rect class="g" x="20" y="174" width="290" height="34" rx="6" style="fill:var(--box3)"/><text x="32" y="196" font-size="12">Auth/Profile agent</text>
+  <rect class="g" x="325" y="174" width="290" height="34" rx="6" style="fill:var(--box3)"/><text x="337" y="196" font-size="12">Meals agent</text>
+  <rect class="g" x="630" y="174" width="290" height="34" rx="6" style="fill:var(--box3)"/><text x="642" y="196" font-size="12">Activity agent</text>
+
+  <text class="t" x="20" y="236">Step 3: review, then Step 4: integrate</text>
+  <rect class="g" x="20" y="246" width="440" height="34" rx="6" style="fill:var(--box4)"/><text x="32" y="268" font-size="12">Reviewer agent (read-only): RLS, secrets, validation, rules</text>
+  <rect class="g" x="480" y="246" width="440" height="34" rx="6" style="fill:var(--box2)"/><text x="492" y="268" font-size="12">Orchestrator: merge, run checks, test checklist, STOP</text>
+</svg>
+<figcaption>Phase 1 plan. Later phases repeat the pattern: contract first, parallel workstreams with disjoint file ownership, review, integrate, stop.</figcaption>
+</figure>
+
+<h3>File ownership (prevents merge conflicts)</h3>
+<table>
+  <tr><th>Agent</th><th>Owns</th></tr>
+  <tr><td>DB</td><td><code>supabase/</code></td></tr>
+  <tr><td>Shared</td><td><code>packages/shared/</code></td></tr>
+  <tr><td>Auth/Profile</td><td><code>src/features/auth, profile, weight</code></td></tr>
+  <tr><td>Meals</td><td><code>src/features/meals</code>, food search helpers</td></tr>
+  <tr><td>Activity</td><td><code>src/features/activity</code></td></tr>
+  <tr><td>Orchestrator</td><td>Root config, routing, shared UI, <code>lib/outbox</code>, README, merges</td></tr>
+</table>
+
+<h3>Monitoring and intervention</h3>
+<ul>
+  <li>Agents run in isolated git worktrees on their own branches. Nothing reaches <code>main</code> until I merge it.</li>
+  <li>Background agents notify me on completion. I report progress to you at each step boundary.</li>
+  <li>I can list running agents, send one a correction, or stop it.</li>
+  <li>I re-run <code>tsc</code>, lint and tests on every branch before merging, and don't rely on an agent's own report.</li>
+</ul>
+<table>
+  <tr><th>Intervention trigger</th><th>Action</th></tr>
+  <tr><td>Edits outside owned paths</td><td>Message the agent to revert, or stop it</td></tr>
+  <tr><td>Secret or service key in client code</td><td>Stop immediately, fix, re-run review</td></tr>
+  <tr><td>Calculation duplicated outside the shared module</td><td>Send a correction pointing to the shared function</td></tr>
+  <tr><td>Failing tests or type errors at hand-off</td><td>Send the failure output back to the same agent</td></tr>
+  <tr><td>Stalled or looping</td><td>Stop and re-brief with a narrower task</td></tr>
+</table>
+
+<h2 id="risks">8. Risks and mitigations</h2>
+<table>
+  <tr><th>Risk</th><th>Mitigation</th></tr>
+  <tr><td>Strava rate limits (HTTP 429)</td><td>Request queue with exponential back-off; sync in batches.</td></tr>
+  <tr><td>Duplicate calories between Strava and manual entries</td><td>Overlap detection (same type, &plusmn;30 min) and a keep-one review screen.</td></tr>
+  <tr><td>Offline replay creating duplicates</td><td>Client-generated UUIDs with upsert on insert.</td></tr>
+  <tr><td>Unsafe calorie targets</td><td>Hard floor (1200 F / 1500 M / BMR) with a visible warning and the medical disclaimer.</td></tr>
+  <tr><td>Food data quality</td><td>Seed values reviewed against a reference table; users can add custom foods.</td></tr>
+  <tr><td>Free-tier limits</td><td>Keep sync batched, cache food searches, and use Edge Functions only if required.</td></tr>
+  <tr><td>Parallel agents diverging on types</td><td>Schema and types fixed in step 0; reviewer checks consistency.</td></tr>
+</table>
+
+<h2 id="setup">9. Accounts and keys you will need</h2>
+<table>
+  <tr><th>Item</th><th>Used for</th><th>Needed by</th></tr>
+  <tr><td>Supabase project</td><td>DB, auth, cron; provides <code>SUPABASE_URL</code>, <code>SUPABASE_ANON_KEY</code></td><td>Phase 1</td></tr>
+  <tr><td>Google OAuth client</td><td>Google sign-in</td><td>Phase 1</td></tr>
+  <tr><td>Cloudflare account</td><td>Pages deploy, Worker secrets</td><td>Phase 1 (deploy), Phase 2 (secrets)</td></tr>
+  <tr><td>Strava API app</td><td><code>STRAVA_CLIENT_ID</code>, <code>STRAVA_CLIENT_SECRET</code>, callback domain, webhook token</td><td>Phase 2</td></tr>
+  <tr><td>Resend account</td><td><code>RESEND_API_KEY</code>, weekly email</td><td>Phase 4</td></tr>
+</table>
+<p>Agents write the code, migrations and README steps. Creating the accounts, applying migrations to your Supabase project and entering secrets are steps you do.</p>
+
+</main>
+</body>
+</html>
