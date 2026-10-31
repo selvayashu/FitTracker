@@ -4,7 +4,7 @@ Personal health tracker PWA: exercise (manual now, Strava in Phase 2), weight, m
 
 > BMI and calorie figures are estimates and not medical advice.
 
-**Status:** Phase 1 built (auth, profile, BMI and calorie target, weight log, meals, manual activities); Phase 2 (Strava) in progress. See `docs/implementation-plan.html` for the full plan and `docs/prototype.html` for a clickable prototype.
+**Status:** Phase 1 built (auth, profile, BMI and calorie target, weight log, meals, manual activities); Phase 2 (Strava), Phase 3 (dashboard and reports) and Phase 4 (PWA, export, weekly email) built, awaiting testing. See `docs/implementation-plan.html` for the full plan and `docs/prototype.html` for a clickable prototype.
 
 ## Prerequisites
 
@@ -105,6 +105,48 @@ A response like `{"id": 123456}` means it worked. Add that number as the Cloudfl
 
 **e. Local testing of the Worker code** (optional): copy `.dev.vars.example` to `.dev.vars`, fill it in, then `npm run build && npx wrangler pages dev dist`. The Strava callback domain must then be `localhost`.
 
+## 8. Weekly summary email (Phase 4, optional)
+
+Each user opts in under **Settings, Weekly summary email**. Every Monday about 08:00 IST, Supabase's scheduler asks the site to email each opted-in user a summary of their previous 7 days.
+
+**a. Resend.** Create a free account at https://resend.com and an API key. The sandbox sender `onboarding@resend.dev` only delivers to your own Resend account email, which is enough to test. To email other people, verify a domain in Resend and set `EMAIL_FROM` to an address on it.
+
+**b. Cloudflare secrets** (same place as the Strava ones; redeploy afterwards):
+
+| Name | Value |
+|---|---|
+| `RESEND_API_KEY` | your Resend API key |
+| `EMAIL_FROM` | optional, for example `FitTrack <summary@yourdomain.com>` |
+| `CRON_SECRET` | a random 32+ character string (also stored in the database, next step) |
+| `EMAIL_TOKEN_SECRET` | another random 32+ character string (signs unsubscribe links) |
+
+**c. Supabase.** Apply `supabase/migrations/0008_email.sql`. Then in the dashboard enable the extensions **pg_cron** and **pg_net** (Database, Extensions) and re-run the schedule part of the migration, or follow `supabase/README.md`. Store the endpoint and the same cron secret:
+
+```sql
+insert into app_config (key, value) values
+  ('email_endpoint_url', 'https://YOUR-SITE.pages.dev/api/email/weekly'),
+  ('cron_secret', 'THE-SAME-VALUE-AS-CLOUDFLARE-CRON_SECRET')
+on conflict (key) do update set value = excluded.value;
+```
+
+**d. Try it now** without waiting for Monday (turn the switch on in Settings first, and log some meals in the last 7 days):
+
+```bash
+curl -X POST https://YOUR-SITE.pages.dev/api/email/weekly   -H "Content-Type: application/json" -H "x-cron-secret: YOUR_CRON_SECRET"   -d '{"user_id":"YOUR-USER-UUID","force":true}'
+```
+
+`{"sent":true}` means it was sent. `{"sent":false,"reason":"no_data"}` means nothing was logged in the previous 7 days. Every email has a one-click unsubscribe link.
+
+## 9. Install as an app and offline use
+
+FitTrack is an installable PWA. On Android or desktop Chrome and Edge use **Settings, Install app**; on iPhone use Safari, Share, **Add to Home Screen**. Once loaded, the app opens offline, and meals and activities you add offline are saved on the device and sent when you are back online. When a new version is deployed, a "new version is ready" bar offers **Reload**; nothing reloads by itself.
+
+Only the app files and the food and activity-type lists are cached for offline use. Your personal data, sign-in and `/api` calls are never stored by the service worker.
+
+**Security headers.** `public/_headers` sets standard protective headers and a Content-Security-Policy in **report-only** mode. After you have used every screen (including Strava, reports and PDF export) with the browser console open and seen no "Content Security Policy" violations, rename `Content-Security-Policy-Report-Only` to `Content-Security-Policy` in that file to enforce it.
+
+**Export.** Reports has an **Export** menu: Daily CSV, Entries CSV and PDF, for the range on screen.
+
 ## Project layout
 
 ```
@@ -118,6 +160,6 @@ docs/                 Plan, prototype, Phase 1 contract
 ## Roadmap
 
 1. Auth, profile, BMI and calorie target, weight log, meals, manual activity (done, awaiting your testing)
-2. Strava connect, sync, heart-rate zones, duplicate handling (in progress)
-3. Dashboard and reports
-4. PWA polish, PDF/CSV export, weekly email
+2. Strava connect, sync, heart-rate zones, duplicate handling (done, awaiting your testing)
+3. Dashboard and reports (done, awaiting your testing)
+4. PWA polish, PDF/CSV export, weekly email (in progress)
