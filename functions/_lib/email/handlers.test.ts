@@ -49,11 +49,15 @@ class FakeStore implements EmailStore {
     typeNames: {},
   };
   ranges: DateRange[] = [];
-  sentAt: string[] = [];
+  claims: string[] = [];
+  rollbacks = 0;
+  failRollback = false;
   unsub: Array<[string, boolean]> = [];
-  failMark = false;
+  get last() {
+    return this.profile?.last_weekly_email_at ?? null;
+  }
   async getProfile() {
-    return this.profile;
+    return this.profile ? { ...this.profile } : null;
   }
   async fetchWeekData(_u: string, r: DateRange) {
     this.ranges.push(r);
@@ -62,9 +66,18 @@ class FakeStore implements EmailStore {
   async getUserEmail() {
     return this.email;
   }
-  async setLastWeeklyEmailAt(_u: string, iso: string) {
-    if (this.failMark) throw new Error("x");
-    this.sentAt.push(iso);
+  async claimWeeklySend(_u: string, o: { nowIso: string; cutoffIso: string | null }) {
+    const p = this.profile;
+    if (!p || !p.email_weekly) return false;
+    if (o.cutoffIso && p.last_weekly_email_at && p.last_weekly_email_at >= o.cutoffIso) return false;
+    p.last_weekly_email_at = o.nowIso;
+    this.claims.push(o.nowIso);
+    return true;
+  }
+  async rollbackWeeklySend(_u: string, o: { claimedIso: string; previousIso: string | null }) {
+    if (this.failRollback) throw new Error("x");
+    this.rollbacks++;
+    if (this.profile && this.profile.last_weekly_email_at === o.claimedIso) this.profile.last_weekly_email_at = o.previousIso;
   }
   async setEmailWeekly(u: string, v: boolean) {
     this.unsub.push([u, v]);
@@ -179,7 +192,7 @@ describe("weekly: guards", () => {
     const res = await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
     expect(await res.json()).toEqual({ sent: false, reason: "no_data" });
     expect(s.calls).toHaveLength(0);
-    expect(s.store.sentAt).toHaveLength(0);
+    expect(s.store.last).toBeNull();
   });
 
   it("no_data for a missing or incomplete profile", async () => {
@@ -229,7 +242,7 @@ describe("weekly: sending", () => {
     expect(body.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
     expect(body.html).toContain(unsubUrl);
     expect(body.text).toContain(unsubUrl);
-    expect(s.store.sentAt).toEqual([new Date(NOW).toISOString()]);
+    expect(s.store.last).toBe(new Date(NOW).toISOString());
     // The key appears only in the Authorization header.
     expect(init.body as string).not.toContain(RESEND_KEY);
   });
@@ -245,22 +258,88 @@ describe("weekly: sending", () => {
     const res = await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ sent: false, reason: "send_failed" });
-    expect(s.store.sentAt).toHaveLength(0);
+    expect(s.store.last).toBeNull();
   });
 
   it("returns 502 on a network failure", async () => {
     const s = setup({ resend: "throw" });
     const res = await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
     expect(res.status).toBe(502);
-    expect(s.store.sentAt).toHaveLength(0);
+    expect(s.store.last).toBeNull();
   });
 
-  it("still reports sent when the timestamp update fails", async () => {
+  it("restores the previous timestamp when the send fails", async () => {
+    const prev = new Date(NOW - 8 * 86_400_000).toISOString();
+    const s = setup({ resend: new Response("x", { status: 500 }) });
+    s.store.profile = profile({ last_weekly_email_at: prev });
+    const res = await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
+    expect(res.status).toBe(502);
+    expect(s.store.claims).toHaveLength(1);
+    expect(s.store.last).toBe(prev);
+  });
+
+  it("rollback does not clobber a newer value", async () => {
+    const s = setup({ resend: "throw" });
+    const newer = new Date(NOW + 1000).toISOString();
+    const orig = s.deps.fetch;
+    s.deps.fetch = (async (...a: Parameters<typeof fetch>) => {
+      s.store.profile!.last_weekly_email_at = newer;
+      return orig(...a);
+    }) as typeof fetch;
+    await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
+    expect(s.store.last).toBe(newer);
+  });
+
+  it("a failing rollback still returns 502", async () => {
+    const s = setup({ resend: new Response("x", { status: 500 }) });
+    s.store.failRollback = true;
+    const res = await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
+    expect(res.status).toBe(502);
+    expect(s.logs.some((l) => l.includes("warning"))).toBe(true);
+  });
+
+  it("two concurrent calls send once", async () => {
     const s = setup();
-    s.store.failMark = true;
+    const [a, b] = await Promise.all([
+      handleWeekly(weeklyReq({ user_id: UID }), s.deps),
+      handleWeekly(weeklyReq({ user_id: UID }), s.deps),
+    ]);
+    const bodies = [await a.json(), await b.json()] as Array<{ sent: boolean; reason?: string }>;
+    expect(bodies.filter((x) => x.sent)).toHaveLength(1);
+    expect(bodies.find((x) => !x.sent)).toEqual({ sent: false, reason: "recently_sent" });
+    expect(s.calls).toHaveLength(1);
+  });
+
+  it("sends a workouts-only week and says no meals were logged", async () => {
+    const s = setup();
+    s.store.data = {
+      meals: [],
+      weights: [],
+      typeNames: { 1: "Run" },
+      activities: [{
+        id: "a1", start_time: "2026-03-05T06:00:00Z", activity_type_id: 1, custom_name: null, name: null, source: "manual",
+        duration_min: 30, distance_km: 5, avg_hr: null, max_hr: null, calories: 300, calories_estimated: false,
+        excluded: false, zones: null,
+      }],
+    };
     const res = await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
     expect(await res.json()).toEqual({ sent: true });
-    expect(s.logs.some((l) => l.includes("warning"))).toBe(true);
+    const body = JSON.parse(s.calls[0].init.body as string);
+    expect(body.text.toLowerCase()).toContain("did not log meals");
+    expect(body.text + body.html).not.toMatch(/NaN|Infinity|undefined/);
+  });
+
+  it("explains a refused sandbox sender when EMAIL_FROM is unset", async () => {
+    const s = setup({ resend: new Response("forbidden", { status: 403 }) });
+    const res = await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ sent: false, reason: "send_failed", hint: "sandbox_sender" });
+    expect(s.logs.filter((l) => l.includes("sandbox sender"))).toEqual([
+      "email: Resend refused the sandbox sender (set EMAIL_FROM to an address on a verified domain)",
+    ]);
+    const custom = setup({ resend: new Response("forbidden", { status: 403 }), from: "A <a@example.com>" });
+    const r2 = await handleWeekly(weeklyReq({ user_id: UID }), custom.deps);
+    expect(await r2.json()).toEqual({ sent: false, reason: "send_failed" });
   });
 
   it("never logs secrets, tokens or the address", async () => {
@@ -268,7 +347,7 @@ describe("weekly: sending", () => {
     const token = await signUnsubscribeToken(TOKEN_SECRET, UID);
     for (const resend of ["throw", new Response("x", { status: 500 }), undefined] as const) {
       const s = setup({ resend });
-      s.store.failMark = true;
+      s.store.failRollback = true;
       await handleWeekly(weeklyReq({ user_id: UID }), s.deps);
       await handleWeekly(weeklyReq({ user_id: UID }, { "x-cron-secret": "wrong-guess" }), s.deps);
       await handleUnsubscribe(new Request(`${BASE}/api/email/unsubscribe?token=${token}`, { method: "POST" }), s.deps);
