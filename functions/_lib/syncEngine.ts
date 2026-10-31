@@ -15,8 +15,10 @@ export const BATCH_SIZE = 15;
 export const PAGE_SIZE = 30;
 /** Outbound fetches (Strava + Supabase) allowed per invocation; the platform limit is about 50. */
 export const MAX_FETCHES = 45;
-/** Worst case fetches for one activity: detail, stream, lookup, upsert, zones, near, set duplicate, cursor save. */
-export const PER_ACTIVITY_RESERVE = 8;
+/** Conservative worst case per activity: detail and stream (each may retry once), lookup, upsert (2), zones, near, set duplicate, cursor save. */
+export const PER_ACTIVITY_RESERVE = 12;
+/** Reserve for the page-fetch branch (list + retry + known lookup + cursor save) and the final cursor save. */
+export const PAGE_RESERVE = 5;
 export const LEASE_MS = 60_000;
 export const INITIAL_DAYS = 90;
 const DUP_WINDOW_MIN = 30;
@@ -86,7 +88,39 @@ async function withRetry<T>(deps: EngineDeps, fn: () => Promise<T>): Promise<T> 
   }
 }
 
-/** Refreshes the access token when it expires within 5 minutes; persists BOTH new tokens. */
+/** Token refresh was rejected for a reason that is not a revoked grant (bad client id/secret, misconfiguration). */
+export class ConfigError extends Error {
+  constructor() {
+    super("Strava token refresh is misconfigured");
+    this.name = "ConfigError";
+  }
+}
+
+/** Persists rotated tokens; retries twice more so a transient DB error never loses the new refresh token. */
+async function persistTokens(
+  deps: EngineDeps,
+  userId: string,
+  next: { access_token: string; refresh_token: string; expires_at: number },
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await deps.store.updateTokens(userId, next);
+      return;
+    } catch (e) {
+      if (attempt >= 2) {
+        deps.log?.("token persist failed after retries");
+        throw e;
+      }
+      await deps.sleep(200);
+    }
+  }
+}
+
+/**
+ * Refreshes the access token when it expires within 5 minutes; persists BOTH new tokens.
+ * Only an invalid/revoked grant counts as RevokedError; other 400/401 are ConfigError (nothing is deleted).
+ * A 429 is rethrown as StravaHttpError for the caller to turn into a rate-limited result.
+ */
 export async function ensureFreshToken(deps: EngineDeps, conn: Connection): Promise<Connection> {
   const nowSec = Math.floor(deps.nowMs() / 1000);
   if (!isTokenExpiring(conn.expires_at, nowSec)) return conn;
@@ -94,11 +128,19 @@ export async function ensureFreshToken(deps: EngineDeps, conn: Connection): Prom
   try {
     t = await deps.strava.refreshToken(conn.refresh_token);
   } catch (e) {
-    if (e instanceof StravaHttpError && (e.status === 400 || e.status === 401)) throw new RevokedError();
+    if (e instanceof StravaHttpError && (e.status === 400 || e.status === 401)) {
+      if (!e.grantInvalid) throw new ConfigError();
+      // Another caller (sync vs webhook) may have rotated the tokens meanwhile: use theirs.
+      const latest = await deps.store.getConnection(conn.user_id);
+      if (latest && latest.refresh_token !== conn.refresh_token && !isTokenExpiring(latest.expires_at, nowSec)) {
+        return latest;
+      }
+      throw new RevokedError();
+    }
     throw e;
   }
   const next = { access_token: t.access_token, refresh_token: t.refresh_token, expires_at: t.expires_at };
-  await deps.store.updateTokens(conn.user_id, next);
+  await persistTokens(deps, conn.user_id, next);
   return { ...conn, ...next };
 }
 
@@ -135,7 +177,9 @@ type Outcome = "written" | "gone";
 
 /**
  * Fetches one activity and stores it with HR zones and duplicate marking.
- * `existing`: the stored row (or null when new); undefined means "look it up".
+ * The stored row is looked up right before writing so an existing id is never replaced.
+ * A 403/404 from Strava (e.g. an update event for an activity that is now private or gone)
+ * leaves any existing row untouched and returns "gone".
  * Throws StravaHttpError (429 / 5xx / ...), RevokedError for a 401.
  */
 export async function processActivity(
@@ -143,7 +187,6 @@ export async function processActivity(
   pctx: ProcessContext,
   accessToken: string,
   stravaId: number,
-  existing: ExistingActivity | null | undefined,
 ): Promise<Outcome> {
   const { store, strava } = deps;
   let detail;
@@ -173,9 +216,7 @@ export async function processActivity(
     }
   }
 
-  if (existing === undefined) {
-    existing = (await store.findStravaActivities(pctx.userId, [stravaId]))[0] ?? null;
-  }
+  const existing: ExistingActivity | null = (await store.findStravaActivities(pctx.userId, [stravaId]))[0] ?? null;
   const row = buildActivityFromStrava(detail, {
     userId: pctx.userId,
     typeIdByName: pctx.typeIdByName,
@@ -215,9 +256,15 @@ export async function processActivity(
 
 /** Used by the webhook: process exactly one activity for a connection. */
 export async function syncSingleActivity(deps: EngineDeps, conn: Connection, stravaId: number): Promise<Outcome> {
-  const fresh = await ensureFreshToken(deps, conn);
+  const fresh = await freshConnection(deps, conn);
   const pctx = await loadProcessContext(deps, conn.user_id);
-  return processActivity(deps, pctx, fresh.access_token, stravaId, undefined);
+  return processActivity(deps, pctx, fresh.access_token, stravaId);
+}
+
+/** Re-reads the connection (a sync may have just rotated the tokens) and refreshes if still needed. */
+export async function freshConnection(deps: EngineDeps, conn: Connection): Promise<Connection> {
+  const latest = (await deps.store.getConnection(conn.user_id)) ?? conn;
+  return ensureFreshToken(deps, latest);
 }
 
 function withoutLease(c: SyncCursor): SyncCursor {
@@ -271,7 +318,7 @@ export async function runSyncBatch(deps: EngineDeps, conn: Connection, cursor: S
 
       try {
         if (pending.length === 0) {
-          if (deps.used() + 2 > maxFetches) return partial();
+          if (deps.used() + PAGE_RESERVE > maxFetches) return partial();
           const items = await withRetry(deps, () =>
             strava.listActivities(conn.access_token, {
               after: cur.after ?? 0,
@@ -293,9 +340,8 @@ export async function runSyncBatch(deps: EngineDeps, conn: Connection, cursor: S
         }
 
         if (deps.used() + PER_ACTIVITY_RESERVE > maxFetches) return partial();
-        await ensureKnown(pending);
         const id = pending[0];
-        const outcome = await processActivity(deps, pctx, conn.access_token, id, known.get(id) ?? null);
+        const outcome = await processActivity(deps, pctx, conn.access_token, id);
         pending.shift();
         if (outcome === "written") processed++;
         await saveLeased();

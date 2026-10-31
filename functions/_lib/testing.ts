@@ -184,6 +184,10 @@ export class FakeStrava implements StravaClient {
     this.maybeFail(`list:${o.page}`);
     return (this.pages[o.page - 1] ?? []).map((id) => ({ id }));
   }
+  async getAthlete() {
+    this.calls.push("athlete");
+    this.maybeFail("athlete");
+  }
   async getActivity(_t: string, id: number) {
     this.calls.push(`detail:${id}`);
     this.detailDelayHook?.(id);

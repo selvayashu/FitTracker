@@ -118,7 +118,7 @@ describe("sync handler", () => {
     );
     deps.strava.pages = [[1]];
     const res = await handleSync(syncReq(), deps);
-    expect(await res.json()).toEqual({ done: false, processed: 0, remaining: null });
+    expect(await res.json()).toEqual({ done: false, processed: 0, remaining: null, busy: true });
     expect(deps.strava.calls).toEqual([]);
     expect(conn.sync_cursor?.lease_until).toBe(NOW_SEC * 1000 + 30_000);
   });
@@ -161,6 +161,35 @@ describe("sync handler", () => {
     const res = await handleSync(syncReq(), deps);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ done: false, processed: 0, remaining: 1, rateLimited: { retryAfterSec: 300 } });
+  });
+
+  it("a 429 during token refresh is a rate-limited result, not a 502, and releases the lease", async () => {
+    const deps = makeDeps();
+    deps.store.add(makeConn({ expires_at: NOW_SEC - 1, sync_cursor: { mode: "initial", after: 1, page: 1, pending: [] } }));
+    deps.strava.fail("refresh", new StravaHttpError(429, 321));
+    const res = await handleSync(syncReq(), deps);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ done: false, processed: 0, remaining: null, rateLimited: { retryAfterSec: 321 } });
+    expect(deps.store.conns.get("u1")!.sync_cursor?.lease_until).toBeUndefined();
+  });
+
+  it("a refresh rejected for config reasons returns config_error and deletes nothing", async () => {
+    const deps = makeDeps();
+    deps.store.add(makeConn({ expires_at: NOW_SEC - 1, sync_cursor: { mode: "initial", after: 1, page: 1, pending: [] } }));
+    deps.strava.fail("refresh", new StravaHttpError(401, null, false));
+    const res = await handleSync(syncReq(), deps);
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe("config_error");
+    expect(deps.store.conns.has("u1")).toBe(true);
+  });
+
+  it("an invalid_grant refresh is strava_revoked and deletes the connection", async () => {
+    const deps = makeDeps();
+    deps.store.add(makeConn({ expires_at: NOW_SEC - 1, sync_cursor: { mode: "initial", after: 1, page: 1, pending: [] } }));
+    deps.strava.fail("refresh", new StravaHttpError(400, null, true));
+    const res = await handleSync(syncReq(), deps);
+    expect(((await res.json()) as { error: string }).error).toBe("strava_revoked");
+    expect(deps.store.conns.has("u1")).toBe(false);
   });
 
   it("returns upstream_error 502 when Strava fails and nothing was processed", async () => {
@@ -252,21 +281,80 @@ describe("webhook POST routing", () => {
     expect(deps.store.dupSets[0][1]).toBe("m1");
   });
 
-  it("delete removes the row for that user and strava id", async () => {
+  it("delete removes the row only when Strava answers 404 for the activity", async () => {
     const deps = makeDeps();
     deps.store.add(makeConn());
+    deps.strava.fail("detail:777", new StravaHttpError(404));
     await post(deps, ev({ aspect_type: "delete", object_id: 777 }));
     expect(deps.store.deletedByStravaId).toEqual([["u1", 777]]);
-    expect(deps.strava.calls).toEqual([]);
   });
 
-  it("athlete deauthorization deletes only the connection", async () => {
+  it("a forged delete is ignored when the activity still exists or verification fails", async () => {
     const deps = makeDeps();
     deps.store.add(makeConn());
+    await post(deps, ev({ aspect_type: "delete", object_id: 1 })); // Strava returns the activity
+    deps.strava.fail("detail:2", new StravaHttpError(500));
+    await post(deps, ev({ aspect_type: "delete", object_id: 2 })); // 5xx
+    deps.strava.fail("detail:3", new StravaHttpError(0));
+    await post(deps, ev({ aspect_type: "delete", object_id: 3 })); // network
+    expect(deps.store.deletedByStravaId).toEqual([]);
+  });
+
+  it("athlete deauthorization deletes only the connection, and only when Strava answers 401", async () => {
+    const deps = makeDeps();
+    deps.store.add(makeConn());
+    deps.strava.fail("athlete", new StravaHttpError(401));
     await post(deps, ev({ object_type: "athlete", aspect_type: "update", object_id: 42, updates: { authorized: "false" } }));
     expect(deps.store.conns.size).toBe(0);
     expect(deps.store.deletedStravaActivities).toEqual([]);
     expect(deps.store.deletedByStravaId).toEqual([]);
+  });
+
+  it("a forged deauthorization is ignored when Strava still accepts the token or errors", async () => {
+    const deps = makeDeps();
+    deps.store.add(makeConn());
+    const e = ev({ object_type: "athlete", aspect_type: "update", object_id: 42, updates: { authorized: "false" } });
+    await post(deps, e); // GET /athlete succeeds
+    deps.strava.fail("athlete", new StravaHttpError(503));
+    await post(deps, e);
+    expect(deps.store.conns.size).toBe(1);
+  });
+
+  it("drops events from another subscription when STRAVA_SUBSCRIPTION_ID is set (string compare)", async () => {
+    const deps = makeDeps();
+    deps.config.subscriptionId = "555";
+    deps.store.add(makeConn());
+    const a = await post(deps, ev({ aspect_type: "create", object_id: 1, subscription_id: 999 }));
+    const b = await post(deps, ev({ aspect_type: "create", object_id: 2 }));
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(deps.store.upserts).toEqual([]);
+    await post(deps, ev({ aspect_type: "create", object_id: 3, subscription_id: 555 }));
+    expect(deps.store.upserts.map((r) => r.strava_id)).toEqual([3]);
+  });
+
+  it("an update for an activity that is now 404 leaves the stored row alone and does not crash", async () => {
+    const deps = makeDeps();
+    deps.store.add(makeConn());
+    deps.strava.fail("detail:9", new StravaHttpError(404));
+    const res = await post(deps, ev({ aspect_type: "update", object_id: 9 }));
+    expect(res.status).toBe(200);
+    expect(deps.store.upserts).toEqual([]);
+    expect(deps.store.deletedByStravaId).toEqual([]);
+  });
+
+  it("insert-vs-update race: an activity inserted between lookup and write keeps its id (zones attach to it)", async () => {
+    const deps = makeDeps();
+    deps.store.add(makeConn());
+    deps.store.activities.set("raced-id", { id: "raced-id", user_id: "u1", strava_id: 5 } as never);
+    // Hide the row from the lookup so the engine believes the activity is new.
+    const realFind = deps.store.findStravaActivities.bind(deps.store);
+    deps.store.findStravaActivities = async () => [];
+    await post(deps, ev({ aspect_type: "create", object_id: 5 }));
+    deps.store.findStravaActivities = realFind;
+    expect(deps.store.activities.size).toBe(1);
+    expect([...deps.store.zones.keys()]).toEqual(["raced-id"]);
+    expect(deps.store.activities.get("raced-id")?.name).toBe("Run 5");
   });
 
   it("athlete updates other than deauthorization are ignored", async () => {

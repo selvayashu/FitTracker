@@ -31,6 +31,7 @@ export function buildDeps(env: Env): HandlerDeps {
       clientId: env.STRAVA_CLIENT_ID,
       stateSecret: env.STRAVA_STATE_SECRET,
       webhookVerifyToken: env.STRAVA_WEBHOOK_VERIFY_TOKEN,
+      subscriptionId: env.STRAVA_SUBSCRIPTION_ID || undefined,
     },
     nowMs: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
