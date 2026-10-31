@@ -15,7 +15,7 @@ import { metForIntensity, metKcal } from "./calc";
 import { intensityFromHr, timeInHrZones } from "./strava";
 
 const MAX_CHARS = 12_000_000;
-const MAX_NODES = 3_000_000;
+const MAX_NODES = 500_000;
 const MAX_GAP_S = 30;
 const MIN_HR = 40;
 const MAX_HR = 220;
@@ -33,6 +33,7 @@ interface XNode {
 }
 
 class ScanError extends Error {}
+const TOO_MANY = "too many elements";
 
 const ENTITY_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g;
 
@@ -206,6 +207,7 @@ function scanXml(input: string): XNode {
         const aName = localName(src.slice(aStart, i));
         while (i < len && isWs(src.charCodeAt(i))) i++;
         let value = "";
+        let trailingSlash = false;
         if (src.charCodeAt(i) === 61) {
           i++;
           while (i < len && isWs(src.charCodeAt(i))) i++;
@@ -223,16 +225,20 @@ function scanXml(input: string): XNode {
               i++;
             }
             value = src.slice(vs, i);
+            if (src.charCodeAt(i) === 62 && value.endsWith("/")) {
+              value = value.slice(0, -1);
+              trailingSlash = true;
+            }
           }
         } else if (i === aStart) {
           i++; // safety: never stall on an unexpected character
         }
         if (aName && !(aName in attrs)) attrs[aName] = decodeEntities(value);
-        selfClose = false;
+        selfClose = trailingSlash;
       }
       if (!closed) throw new ScanError("unterminated tag");
       pos = i;
-      if (++nodes > MAX_NODES) throw new ScanError("too many elements");
+      if (++nodes > MAX_NODES) throw new ScanError(TOO_MANY);
       const node: XNode = {
         name: localName(rawName),
         attrs,
@@ -252,15 +258,21 @@ function scanXml(input: string): XNode {
   return root;
 }
 
-/** All descendants (not the node itself) in document order, iteratively. */
-function descendants(node: XNode, name?: string): XNode[] {
+/**
+ * Descendants (not the node itself) in document order, iteratively. With `noNest`, matches are not
+ * searched further, so nested same-named containers are never scanned twice (keeps work linear).
+ */
+function descendants(node: XNode, name?: string, noNest = false): XNode[] {
   const out: XNode[] = [];
   const stack: XNode[] = [];
   for (let i = node.children.length - 1; i >= 0; i--)
     stack.push(node.children[i]);
   while (stack.length) {
     const n = stack.pop() as XNode;
-    if (name === undefined || n.name === name) out.push(n);
+    if (name === undefined || n.name === name) {
+      out.push(n);
+      if (noNest) continue;
+    }
     for (let i = n.children.length - 1; i >= 0; i--) stack.push(n.children[i]);
   }
   return out;
@@ -303,27 +315,36 @@ function parseTime(
   const m = TIME_RE.exec(s.trim());
   if (!m) return null;
   const [, y, mo, d, h, mi, se, frac, zone] = m;
+  const year = Number(y);
   const month = Number(mo);
   const day = Number(d);
+  const hour = Number(h);
+  const minute = Number(mi);
+  const second = Number(se);
+  // 24:00:00 is allowed (end of day); seconds 60 (leap second) are not.
+  const midnight24 = hour === 24 && minute === 0 && second === 0;
   if (
     month < 1 ||
     month > 12 ||
     day < 1 ||
-    day > 31 ||
-    Number(h) > 23 ||
-    Number(mi) > 59 ||
-    Number(se) > 60
+    minute > 59 ||
+    second > 59 ||
+    (hour > 23 && !midnight24)
   ) {
     return null;
   }
-  let ms = Date.UTC(
-    Number(y),
-    month - 1,
-    day,
-    Number(h),
-    Number(mi),
-    Number(se),
-  );
+  const dt = new Date(0);
+  dt.setUTCFullYear(year, month - 1, day); // setUTCFullYear avoids Date.UTC's 0..99 -> 19xx quirk
+  dt.setUTCHours(midnight24 ? 0 : hour, minute, second, 0);
+  // Reject calendar overflow such as 2024-02-31.
+  if (
+    dt.getUTCFullYear() !== year ||
+    dt.getUTCMonth() !== month - 1 ||
+    dt.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  let ms = dt.getTime() + (midnight24 ? 86_400_000 : 0);
   if (frac) ms += Math.round(Number(`0.${frac}`) * 1000);
   let offsetMin = 0;
   let assumed = false;
@@ -335,6 +356,8 @@ function parseTime(
     const digits = zone.slice(1).replace(":", "");
     const oh = Number(digits.slice(0, 2));
     const om = digits.length > 2 ? Number(digits.slice(2, 4)) : 0;
+    // Offsets: hours 0..14, minutes 0..59 (any minute value in that range is accepted).
+    if (oh > 14 || om > 59 || (oh === 14 && om > 0)) return null;
     offsetMin = sign * (oh * 60 + om);
   }
   ms -= offsetMin * 60_000;
@@ -350,6 +373,7 @@ interface Pt {
   lon: number;
   ele: number;
   hr: number;
+  badTime: boolean; // a timestamp was present but unreadable
   distM: number; // cumulative metres from the file (TCX), NaN when absent
 }
 
@@ -477,8 +501,8 @@ function gpxPoint(
   let hr = NaN;
   const ext = child(node, "extensions");
   if (ext) {
-    const hrNodes = descendants(ext, "hr");
-    const hn = hrNodes.length ? hrNodes : descendants(ext, "heartrate");
+    const hrNodes = descendants(ext, "hr", true);
+    const hn = hrNodes.length ? hrNodes : descendants(ext, "heartrate", true);
     if (hn.length) hr = num(hn[0].text);
   }
   if (!Number.isFinite(hr)) {
@@ -492,6 +516,7 @@ function gpxPoint(
       lon: num(node.attrs.lon),
       ele: num(childText(node, "ele")),
       hr,
+      badTime: !time && childText(node, "time") !== null,
       distM: NaN,
     },
     assumed: !!time && time.assumed,
@@ -507,13 +532,13 @@ function parseGpx(root: XNode, opts: ParseOptions): Extracted {
   const assumeTz = opts.assumeTz ?? "utc";
   const meta = child(root, "metadata");
   const metaName = meta ? childText(meta, "name") : null;
-  const trks = descendants(root, "trk");
+  const trks = descendants(root, "trk", true);
   const workouts: ParsedWorkout[] = [];
   let skipped = 0;
   for (const trk of trks) {
     const pts: Pt[] = [];
     let assumed = false;
-    for (const tp of descendants(trk, "trkpt")) {
+    for (const tp of descendants(trk, "trkpt", true)) {
       const r = gpxPoint(tp, assumeTz);
       pts.push(r.pt);
       if (r.assumed) assumed = true;
@@ -522,7 +547,7 @@ function parseGpx(root: XNode, opts: ParseOptions): Extracted {
       format: "gpx",
       pts,
       name: childText(trk, "name") ?? (trks.length === 1 ? metaName : null),
-      sportHint: childText(trk, "type"),
+      sportHint: childText(trk, "type")?.slice(0, 200) ?? null,
       assumed,
       fileDistanceKm: null,
       fileElapsedSec: null,
@@ -553,6 +578,7 @@ function tcxPoint(
       lon: pos ? num(childText(pos, "LongitudeDegrees")) : NaN,
       ele: num(childText(node, "AltitudeMeters")),
       hr: hrNode ? num(childText(hrNode, "Value") ?? hrNode.text) : NaN,
+      badTime: !time && childText(node, "Time") !== null,
       distM: num(childText(node, "DistanceMeters")),
     },
     assumed: !!time && time.assumed,
@@ -567,7 +593,7 @@ function parseTcx(root: XNode, opts: ParseOptions): Extracted {
   const assumeTz = opts.assumeTz ?? "utc";
   const workouts: ParsedWorkout[] = [];
   let skipped = 0;
-  for (const act of descendants(root, "Activity")) {
+  for (const act of descendants(root, "Activity", true)) {
     const pts: Pt[] = [];
     let assumed = false;
     let totalTime = 0;
@@ -576,7 +602,7 @@ function parseTcx(root: XNode, opts: ParseOptions): Extracted {
     let firstLapStart: number | null = null;
     const lapAvg: { hr: number; w: number }[] = [];
     let lapMax = NaN;
-    for (const lap of descendants(act, "Lap")) {
+    for (const lap of descendants(act, "Lap", true)) {
       const ls = parseTime(lap.attrs.StartTime, assumeTz);
       if (ls && firstLapStart === null) {
         firstLapStart = ls.ms;
@@ -600,7 +626,7 @@ function parseTcx(root: XNode, opts: ParseOptions): Extracted {
         !(mx <= lapMax)
       )
         lapMax = mx;
-      for (const tp of descendants(lap, "Trackpoint")) {
+      for (const tp of descendants(lap, "Trackpoint", true)) {
         const r = tcxPoint(tp, assumeTz);
         pts.push(r.pt);
         if (r.assumed) assumed = true;
@@ -618,7 +644,7 @@ function parseTcx(root: XNode, opts: ParseOptions): Extracted {
       format: "tcx",
       pts,
       name: null,
-      sportHint: act.attrs.Sport ?? null,
+      sportHint: act.attrs.Sport?.slice(0, 200) ?? null,
       assumed,
       fileDistanceKm: totalDist > 0 ? totalDist / 1000 : null,
       fileElapsedSec: totalTime > 0 ? totalTime : null,
@@ -655,6 +681,9 @@ function buildWorkout(b: BuildInput): ParsedWorkout | null {
   const startMs = b.fileStartMs ?? (times.length ? times[0] : null);
   if (startMs === null) return null;
   const warnings: string[] = [];
+  if (b.pts.some((p) => p.badTime)) {
+    warnings.push("Some timestamps could not be read and were ignored.");
+  }
 
   let pause = 0;
   for (let i = 1; i < times.length; i++) {
@@ -735,6 +764,10 @@ export function detectFormat(text: string): ActivityFileFormat | null {
   }
 }
 
+/**
+ * Callers should call only this (it detects the format itself); `detectFormat` rescans the text.
+ * `opts.fileName` is accepted for API compatibility and not used by the parser.
+ */
 export function parseActivityFile(
   text: string,
   opts: ParseOptions = {},
@@ -751,7 +784,12 @@ export function parseActivityFile(
   let doc: XNode;
   try {
     doc = scanXml(text);
-  } catch {
+  } catch (e) {
+    if (e instanceof ScanError && e.message === TOO_MANY)
+      return {
+        ok: false,
+        error: "This file has too many elements to read safely.",
+      };
     return {
       ok: false,
       error:
@@ -803,28 +841,34 @@ export function mapFileSport(hint: string | null): {
 } {
   let h = (hint ?? "").trim().toLowerCase();
   h = h.replace(/^(sport|type)\s*=\s*/, "").trim();
-  const has = (...words: string[]) => words.some((w) => h.includes(w));
+  // Word-start matching: "stride" is not "ride", and bare "skip" only matches as a whole word.
+  const has = (re: RegExp) => re.test(h);
   const named = (typeName: string) => ({ typeName, custom: null });
-  if (h) {
-    if (has("brisk", "fast walk", "power walk")) return named("Brisk walking");
-    if (has("cycl", "bik", "ride", "bicycle")) return named("Cycling");
-    if (has("run", "jog", "treadmill")) return named("Running");
-    if (has("walk", "hik")) return named("Walking");
-    if (has("swim", "open water")) return named("Swimming");
-    if (has("yoga")) return named("Yoga");
-    if (has("hiit", "interval")) return named("HIIT");
-    if (has("strength", "gym", "weight", "workout", "fitness"))
+  if (h && h !== "other" && h !== "generic") {
+    if (has(/\b(?:brisk|fast walk|power walk)/)) return named("Brisk walking");
+    if (has(/\b(?:cycl\w*|bik(?:e|es|ing)|rid(?:e|es|ing)|bicycl\w*)\b/))
+      return named("Cycling");
+    // walking is checked before treadmill so "Treadmill walking" stays Walking
+    if (has(/\b(?:walk\w*|hik(?:e|es|ing))\b/)) return named("Walking");
+    if (has(/\b(?:run\w*|jog\w*|treadmill)\b/)) return named("Running");
+    if (has(/\b(?:swim\w*|open water)/)) return named("Swimming");
+    if (has(/\byoga\b/)) return named("Yoga");
+    if (has(/\b(?:hiit|interval\w*)/)) return named("HIIT");
+    if (has(/\b(?:strength|gym|weight\w*|workout|fitness)/))
       return named("Gym / Strength training");
-    if (has("elliptical", "stair", "stepper")) return named("Stair climbing");
-    if (has("jump rope", "skipping", "skip")) return named("Skipping");
-    if (has("badminton")) return named("Badminton");
-    if (has("tennis")) return named("Tennis");
-    if (has("football", "soccer")) return named("Football");
-    if (has("cricket")) return named("Cricket");
-    if (has("dance")) return named("Dance");
-    if (has("household", "chore")) return named("Household chores");
-    if (has("garden")) return named("Gardening");
+    if (has(/\b(?:elliptical|stair\w*|stepper)\b/))
+      return named("Stair climbing");
+    if (has(/\b(?:jump rope|skipping|skip)\b/)) return named("Skipping");
+    if (has(/\bbadminton\b/)) return named("Badminton");
+    if (has(/\btennis\b/)) return named("Tennis");
+    if (has(/\b(?:football|soccer)\b/)) return named("Football");
+    if (has(/\bcricket\b/)) return named("Cricket");
+    if (has(/\bdanc\w*/)) return named("Dance");
+    if (has(/\b(?:household|chores?)\b/)) return named("Household chores");
+    if (has(/\bgarden\w*/)) return named("Gardening");
   }
+  if (h === "other" || h === "generic")
+    return { typeName: "Other", custom: "Workout" };
   const cleaned = titleCase(h.replace(/[^\p{L}\p{N}\s/&-]+/gu, " ")).slice(
     0,
     60,
@@ -854,6 +898,8 @@ export function validateParsedWorkout(
     problems.push("The workout is longer than 10 hours (600 minutes).");
   if (w.elapsedSec > 24 * 3600)
     problems.push("The workout spans more than 24 hours.");
+  if (new Date(startMs).getUTCFullYear() < 2000)
+    problems.push("The date in this file looks wrong (before 2000).");
   if (startMs > now.getTime() + 5 * 60_000)
     problems.push("The workout starts in the future.");
   if (w.distanceKm !== null && !Number.isFinite(w.distanceKm)) {
@@ -915,6 +961,8 @@ export function buildImportRow(
   const mappedId = ctx.typeIdByName[typeName];
   const typeId = mappedId ?? ctx.typeIdByName["Other"] ?? 18;
   const isOther = typeName === "Other" || mappedId === undefined;
+  // A mapped type missing from the lookup falls back to "Other" but keeps its name as the custom name.
+  const customName = typeName === "Other" ? (custom ?? "Workout") : typeName;
   const durationMin = Math.min(
     600,
     Math.max(1, Math.round((w.movingSec ?? w.elapsedSec) / 60)),
@@ -950,7 +998,7 @@ export function buildImportRow(
     user_id: ctx.userId,
     source: "manual",
     activity_type_id: typeId,
-    custom_name: isOther ? (custom ?? "Workout") : null,
+    custom_name: isOther ? customName : null,
     start_time: w.startTime,
     duration_min: durationMin,
     distance_km:
@@ -971,5 +1019,13 @@ export function hrZoneSecondsForWorkout(
   maxHr: number,
 ): [number, number, number, number, number] | null {
   if (!w.hr || w.hr.heartrate.length === 0) return null;
-  return timeInHrZones(w.hr, maxHr);
+  // activity_hr_zones.zone*_s are integer columns: whole seconds per zone (each zone rounded).
+  const z = timeInHrZones(w.hr, maxHr);
+  return z.map((v) => Math.max(0, Math.round(v))) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
 }
