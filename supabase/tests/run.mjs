@@ -159,6 +159,7 @@ ok("valid profile update", (await fails(A, `update profiles set height_cm=170, w
 await db.exec(`insert into activities (user_id, activity_type_id, start_time, duration_min, strava_id) values ('${A}',1,now(),10,555)`);
 ok("strava_id unique", /unique|duplicate/i.test(await fails(A, `insert into activities (user_id, activity_type_id, start_time, duration_min, strava_id) values ('${A}',1,now(),10,555)`) ?? ""));
 ok("multiple null strava_id ok", (await fails(A, `insert into activities (user_id, activity_type_id, start_time, duration_min) values ('${A}',1,now(),10),('${A}',1,now(),10)`)) === null);
+ok("ON CONFLICT (strava_id) upsert works", (await fails(A, `insert into activities (user_id, activity_type_id, start_time, duration_min, strava_id) values ('${A}',1,now(),20,555) on conflict (strava_id) do update set duration_min = excluded.duration_min`)) === null);
 await db.exec(`delete from activities where user_id='${A}'`);
 
 // ---- updated_at trigger

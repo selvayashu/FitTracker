@@ -22,7 +22,7 @@ npm install
 ## 2. Supabase setup
 
 1. Create a new Supabase project. Note the **Project URL** and the **anon public key** (Project Settings, API).
-2. Apply the migrations in `supabase/migrations` **in order** (0001 to 0005). Either:
+2. Apply the migrations in `supabase/migrations` **in order** (0001 to 0005, plus 0006 and 0007 for Strava). Either:
    - paste each file into the Supabase SQL Editor and run it, or
    - use the CLI: `npx supabase login`, `npx supabase link --project-ref <ref>`, `npx supabase db push`.
 3. Authentication, Providers: email is on by default. For Google sign-in, create an OAuth client in Google Cloud Console and add its client ID and secret under the Google provider. Add your site URL (local `http://localhost:5173` and your Cloudflare Pages URL, each also with `/reset-password` as an allowed redirect for the password-reset email) under Authentication, URL Configuration.
@@ -80,7 +80,7 @@ FitTrack works fully without Strava. To enable syncing:
 - **Authorization Callback Domain:** your domain only, no `https://` and no path, for example `fittrack.pages.dev` (use `localhost` for local testing).
 - Copy the **Client ID** and **Client Secret**. A new Strava app is limited to one athlete (you) until Strava approves it, which is fine for personal use. Default limits are 100 requests per 15 minutes and 1,000 per day; the sync backs off automatically.
 
-**b. Apply the Strava migration.** `supabase/migrations/0006_strava.sql` (run after 0001-0005). Tokens are stored in a table that browsers cannot read.
+**b. Apply the Strava migrations.** `supabase/migrations/0006_strava.sql` and `0007_strava_id_unique.sql` (run after 0001-0005). Tokens are stored in a table that browsers cannot read.
 
 **c. Set the secrets in Cloudflare** (Pages project, Settings, Variables and Secrets, add as *Secret* for Production and Preview):
 

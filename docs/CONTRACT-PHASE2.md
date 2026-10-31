@@ -36,6 +36,8 @@ RPC `strava_status()` (security definer, `search_path = public`): returns one ro
 
 `recompute_daily_summary` must ignore rows where `excluded = true`.
 
+Migration `0007_strava_id_unique.sql` (already written) replaces the partial unique index on `activities.strava_id` with a plain one, so the Worker can upsert with `onConflict: "strava_id"`. On conflict it must update only the Strava-owned columns (the shared builder never includes `notes`, `excluded`, `duplicate_dismissed`, `duplicate_of`).
+
 ## Worker API (`functions/api/strava/*`, Cloudflare Pages Functions, TypeScript)
 
 All JSON. Errors: `{ "error": "<code>", "message": "<text>" }` with a suitable HTTP status. Types are in `src/lib/strava.ts`.
