@@ -60,11 +60,11 @@ function Details({ s, targetKg }: { s: RangeSummary; targetKg: number }) {
 
       <section className={cardCls} aria-label="Progress toward target weight">
         <h2 className="font-semibold">Progress toward target weight</h2>
-        {w.latestKg == null ? (
+        {w.latestKg == null && w.progressPct == null ? (
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">No weight logged yet.</p>
         ) : (
           <>
-            <div className="mt-1 flex justify-between text-sm"><span>Latest <b>{fmtKg(w.latestKg)}</b></span><span>Target <b>{fmtKg(targetKg)}</b></span></div>
+            <div className="mt-1 flex justify-between text-sm"><span>{w.latestKg != null ? <>Latest in range <b>{fmtKg(w.latestKg)}</b></> : "No weight logged in this range"}</span><span>Target <b>{fmtKg(targetKg)}</b></span></div>
             {w.progressPct != null && (
               <>
                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700" role="progressbar" aria-valuenow={Math.round(safe(w.progressPct))} aria-valuemin={0} aria-valuemax={100} aria-label="Progress to target weight">
@@ -108,7 +108,10 @@ function Details({ s, targetKg }: { s: RangeSummary; targetKg: number }) {
 export function ReportsPage() {
   const { user } = useSession();
   const { profile, loading: profileLoading, error: profileError, refresh } = useProfile();
-  const reportProfile = useMemo(() => toReportProfile(profile), [profile]);
+  // Key the profile by value so an unrelated profile refresh (same numbers) does not refetch the report.
+  const profileKey = JSON.stringify(toReportProfile(profile));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const reportProfile = useMemo(() => toReportProfile(profile), [profileKey]);
 
   const [today] = useState(() => istToday());
   const [preset, setPreset] = useState<RangePreset>("week");
@@ -132,6 +135,7 @@ export function ReportsPage() {
       .then((r) => { if (guard.current.isCurrent(id)) { setInputs(r); setLoading(false); } })
       .catch((e: unknown) => {
         if (!guard.current.isCurrent(id)) return;
+        setInputs(null); // never show another range's figures under this range's label
         setError(e instanceof Error ? e.message : "Could not load your report.");
         setLoading(false);
       });
@@ -166,10 +170,10 @@ export function ReportsPage() {
   if (profileError) return <ErrorState message={`Could not load your profile: ${profileError}`} onRetry={() => void refresh()} />;
   if (!reportProfile) {
     return (
-      <main className="mx-auto max-w-md p-4">
+      <div className="mx-auto max-w-md p-4">
         <EmptyState title="Complete your profile" hint="Reports need your targets and body measurements."
           action={<Link to="/onboarding" className="inline-block rounded-lg bg-teal-600 px-4 py-2 font-medium text-white">Complete your profile</Link>} />
-      </main>
+      </div>
     );
   }
 
@@ -178,7 +182,7 @@ export function ReportsPage() {
   const empty = summary != null && summary.loggedDays === 0 && summary.activity.workouts === 0 && summary.weight.series.length === 0;
 
   return (
-    <main className="mx-auto w-full max-w-3xl space-y-4 overflow-x-hidden p-4 pb-10">
+    <div className="mx-auto w-full max-w-3xl space-y-4 overflow-x-hidden p-4 pb-10">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Reports</h1>
         {loading && inputs && <span role="status" className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400"><span className="h-3 w-3 animate-spin rounded-full border-2 border-teal-600 border-t-transparent" />Updating</span>}
@@ -247,6 +251,6 @@ export function ReportsPage() {
         </div>
       )}
       <Disclaimer />
-    </main>
+    </div>
   );
 }

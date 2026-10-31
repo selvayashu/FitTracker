@@ -110,10 +110,10 @@ export function WeightPage() {
   if (profileError) return <ErrorState message={`Could not load your profile: ${profileError}`} onRetry={() => void refresh()} />;
   if (!profile || !derived || !profile.height_cm || !profile.target_weight_kg) {
     return (
-      <main className="mx-auto max-w-md p-4">
+      <div className="mx-auto max-w-md p-4">
         <EmptyState title="Complete your profile" hint="We need your height and target weight before you can log weight."
           action={<Link to="/onboarding" className="inline-block rounded-lg bg-teal-600 px-4 py-2 font-medium text-white">Complete your profile</Link>} />
-      </main>
+      </div>
     );
   }
 
@@ -123,7 +123,7 @@ export function WeightPage() {
   const pct = first ? progressPct(first.weight_kg, current, profile.target_weight_kg) : 0;
 
   return (
-    <main className="mx-auto max-w-md space-y-4 p-4 pb-10">
+    <div className="mx-auto max-w-md space-y-4 p-4 pb-10">
       <h1 className="text-xl font-semibold">Weight</h1>
 
       <section className={cardCls} aria-label="Progress">
@@ -192,6 +192,6 @@ export function WeightPage() {
         )}
       </section>
       <Disclaimer />
-    </main>
+    </div>
   );
 }

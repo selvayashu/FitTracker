@@ -66,13 +66,13 @@ export async function fetchRangeData(userId: string, range: DateRange): Promise<
   const [meals, acts, weights, types] = await Promise.all([
     fetchAllPages<ReportMeal>((a, b) =>
       supabase.from("meal_entries").select("date,meal_type,food_name,kcal,protein,carbs,fat")
-        .eq("user_id", userId).gte("date", range.from).lte("date", range.to).order("date").range(a, b) as unknown as PromiseLike<PageResult<ReportMeal>>),
+        .eq("user_id", userId).gte("date", range.from).lte("date", range.to).order("date").order("id").range(a, b) as unknown as PromiseLike<PageResult<ReportMeal>>),
     fetchAllPages<RawActivity>((a, b) =>
       supabase.from("activities").select(ACTIVITY_COLS)
         .eq("user_id", userId).eq("excluded", false).gte("start_time", startIso).lt("start_time", endIso)
-        .order("start_time").range(a, b) as unknown as PromiseLike<PageResult<RawActivity>>),
+        .order("start_time").order("id").range(a, b) as unknown as PromiseLike<PageResult<RawActivity>>),
     fetchAllPages<ReportWeight>((a, b) =>
-      supabase.from("weight_logs").select("date,weight_kg").eq("user_id", userId).order("date").range(a, b) as unknown as PromiseLike<PageResult<ReportWeight>>),
+      supabase.from("weight_logs").select("date,weight_kg").eq("user_id", userId).order("date").order("id").range(a, b) as unknown as PromiseLike<PageResult<ReportWeight>>),
     supabase.from("activity_types").select("id,name"),
   ]);
   if (types.error) throw new Error(types.error.message);

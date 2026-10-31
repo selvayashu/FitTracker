@@ -159,7 +159,7 @@ export function MealsPage() {
   const isToday = date >= today;
 
   return (
-    <main className="mx-auto max-w-md space-y-4 p-4 pb-24">
+    <div className="mx-auto max-w-md space-y-4 p-4 pb-24">
       <header className="flex items-center justify-between gap-2">
         <button className={btnGhost} aria-label="Previous day" onClick={() => setDate(addDaysIst(date, -1))}>&lt;</button>
         <div className="text-center">
@@ -248,7 +248,7 @@ export function MealsPage() {
       {dialog?.kind === "pickFav" && (
         <PickFavSheet userId={userId} onClose={() => setDialog(null)} onPick={(f) => void addFavourite(dialog.meal, f)} />
       )}
-    </main>
+    </div>
   );
 }
 

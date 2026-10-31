@@ -14,14 +14,14 @@ export function HomePage() {
   if (error) return <ErrorState message={`Could not load your profile: ${error}`} onRetry={() => void refresh()} />;
   if (!profile || !derived || !profile.height_cm || !profile.weight_kg || !profile.target_weight_kg || !profile.goal || !profile.pace) {
     return (
-      <main className="mx-auto max-w-md p-4">
+      <div className="mx-auto max-w-md p-4">
         <EmptyState
           title="Complete your profile"
           hint="Add your height, weight and goal to see your BMI and daily calorie target."
           action={<Link to="/onboarding" className="inline-block rounded-lg bg-teal-600 px-4 py-2 font-medium text-white">Complete your profile</Link>}
         />
         <Disclaimer />
-      </main>
+      </div>
     );
   }
 
@@ -34,7 +34,7 @@ export function HomePage() {
   const kcal = (n: number) => n.toLocaleString("en-IN");
 
   return (
-    <main className="mx-auto max-w-md space-y-4 p-4 pb-10">
+    <div className="mx-auto max-w-md space-y-4 p-4 pb-10">
       <h1 className="text-xl font-semibold">{profile.name ? `Hi, ${profile.name}` : "Your summary"}</h1>
       <StravaSyncChip strava={strava} />
 
@@ -87,6 +87,6 @@ export function HomePage() {
         )}
       </section>
       <Disclaimer />
-    </main>
+    </div>
   );
 }

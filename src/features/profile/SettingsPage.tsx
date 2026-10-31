@@ -99,7 +99,7 @@ export function SettingsPage() {
   };
 
   return (
-    <main className="mx-auto max-w-md space-y-4 p-4 pb-10">
+    <div className="mx-auto max-w-md space-y-4 p-4 pb-10">
       <h1 className="text-xl font-semibold">Settings</h1>
       <form onSubmit={save} className="space-y-4" noValidate>
         <ProfileFields form={f} setForm={update} errors={errors} settings />
@@ -151,6 +151,6 @@ export function SettingsPage() {
         <button type="button" onClick={() => void signOut()} className={`${secondaryBtn} w-full`}>Sign out</button>
       </section>
       <Disclaimer />
-    </main>
+    </div>
   );
 }

@@ -1,7 +1,5 @@
 # Phase 3 Test Checklist (Dashboard and Reports)
 
-> **Draft written from `docs/CONTRACT-PHASE3.md` before the screens were built.** Item wording and numbers will be re-checked against the finished screens before you test; treat anything that does not match the app as a checklist bug and tell me.
-
 Covers: the Today dashboard and the Reports screen (ranges, charts, metrics, insights).
 No new migrations, secrets or Cloudflare settings are needed. Phase 1 must work (and Phase 2 if you use Strava).
 **Record every failure** (screen, steps, expected vs actual, browser console).
@@ -44,7 +42,7 @@ Use the Phase 1 worked profile: female, 162 cm, 68 kg, target 60 kg, light activ
 ## D. Reports: ranges
 
 - [ ] Default view is **Week** (7 days ending today). Day, Week, Month and Custom all work.
-- [ ] The label shows the date range in IST (for example "5 Mar - 11 Mar"). Previous/next arrows move by the range length; **next** is disabled or does nothing when the range already ends today.
+- [ ] The label shows the date range in IST (for example "5 Mar - 11 Mar"). Previous/next arrows move by the range length. Going forward never passes today (it clamps to today and keeps the length).
 - [ ] Custom range: a start after the end, a future end date and a range longer than 366 days each show a clear message and do not load data. A valid range loads.
 - [ ] Switching range type keeps the anchor date sensible and does not flash wrong data.
 
@@ -67,7 +65,8 @@ Pick the Week range that contains the test data from section A.
 - [ ] **Macro averages** vs targets show percent of target; the kcal split sums to 100%.
 - [ ] **Calories per meal slot** shows average kcal and percentage per slot; percentages sum to about 100%.
 - [ ] **Highest-calorie foods** lists up to 5 foods by total kcal in the range; the top one matches what you logged.
-- [ ] **Weight and BMI trend** shows only weight entries inside the range; **progress toward target** uses your first weight ever and your latest weight (0-100%, 100% for a maintain goal).
+- [ ] **Weight and BMI trend** shows only weight entries inside the range. **Progress toward target** uses your first weight ever and your latest weight on or before the end of the range (0-100%, 100% for a maintain goal).
+- [ ] Weight logged only on an earlier date (for example 1 Oct) and a Day report for 20 Oct: progress still shows, and the card says "No weight logged in this range" instead of "No weight logged yet".
 - [ ] Day range for today matches the Today dashboard exactly (consumed, burned, net).
 
 ## F. Reports: heart rate
@@ -100,6 +99,14 @@ Pick the Week range that contains the test data from section A.
 - [ ] Meals logged just before midnight IST and activities started late evening fall on the correct IST day, not the next UTC day.
 - [ ] Sign in as a second account: no data from the first account appears.
 
+## I2. Data loading and refresh (fixed after review)
+
+- [ ] **Long custom range (over 1,000 rows):** log or import more than 1,000 meal entries in a year (or use a test account), open a 366-day Custom report, and compare the meal count and total kcal with Supabase (Table Editor, `meal_entries`, filter by date). They must match exactly: nothing missing, nothing double counted.
+- [ ] **Failed load:** open Reports on Week, block the Supabase domain in DevTools, tap Previous: you see the error with **Try again** and **no figures from the other week** under the new date label. Unblock and retry: the new week loads.
+- [ ] **Target change:** change the activity level or goal in Settings, return to Today: the ring and macro targets show the new numbers (no flash of the old target). Check again while offline: you never see the old target, only a loading or offline state.
+- [ ] Reports does not refetch when you only switch tabs and return without any change (watch the Network tab); it refetches after you change the profile or the range.
+- [ ] Each page has one main landmark (screen reader or the browser accessibility tree): no nested "main" regions on Today, Meals, Reports, Weight, Settings and Health.
+
 ## J. Regression
 
 - [ ] Meals, Activity (including Strava sync, duplicates and HR zones), Weight and Settings all behave as before.
@@ -111,6 +118,7 @@ Pick the Week range that contains the test data from section A.
 - Historical days use today's stored calorie target and add-back percentage; only BMR follows your weight history.
 - Calories out are estimates (BMR formula plus MET or Strava calories), not measurements.
 - Entries queued while offline appear on Today and Reports only after they sync.
+- The Reports page treats the day it was opened as "today"; if you leave it open across IST midnight, switch tabs or reload to move to the new day.
 - PDF/CSV export and the weekly email arrive in Phase 4.
 - Real Supabase behaviour has not been exercised by automated tests; calculations are covered by unit tests only.
 

@@ -132,14 +132,14 @@ export function DashboardPage() {
   if (profError) return <ErrorState message={`Could not load your profile: ${profError}`} onRetry={() => void refresh()} />;
   if (incomplete || !profile || !derived) {
     return (
-      <main className="mx-auto max-w-md p-4">
+      <div className="mx-auto max-w-md p-4">
         <EmptyState
           title="Complete your profile"
           hint="Add your height, weight and goal to see your daily calories."
           action={<Link to="/onboarding" className="inline-block rounded-lg bg-teal-600 px-4 py-2 font-medium text-white">Complete your profile</Link>}
         />
         <Disclaimer />
-      </main>
+      </div>
     );
   }
 
@@ -150,7 +150,7 @@ export function DashboardPage() {
   const weight = data?.latestWeightKg ?? profile.weight_kg;
 
   return (
-    <main className="mx-auto max-w-md space-y-4 p-4 pb-28">
+    <div className="mx-auto max-w-md space-y-4 p-4 pb-28">
       <header className="flex items-baseline justify-between gap-2">
         <h1 className="min-w-0 truncate text-xl font-semibold">{profile.name ? `Hi, ${profile.name}` : "Today"}</h1>
         <p className={`shrink-0 text-sm ${muted}`}>{formatIstDate(today)}</p>
@@ -264,6 +264,6 @@ export function DashboardPage() {
         + Add Activity
       </button>
       {adding && <AddActivitySheet onClose={closeAdd} />}
-    </main>
+    </div>
   );
 }
