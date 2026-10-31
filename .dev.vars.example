@@ -8,3 +8,13 @@ STRAVA_CLIENT_SECRET=your-strava-client-secret
 STRAVA_WEBHOOK_VERIFY_TOKEN=a-long-random-string
 STRAVA_STATE_SECRET=another-long-random-string-at-least-32-chars
 STRAVA_SUBSCRIPTION_ID=
+
+# Phase 4: weekly summary email
+# Resend API key (https://resend.com). Cloudflare secret in production.
+RESEND_API_KEY=re_your_resend_key
+# Optional sender, e.g. FitTrack <summary@yourdomain.com>. Empty uses Resend sandbox sender (delivers only to your own Resend account email).
+EMAIL_FROM=
+# Must equal the cron_secret row in public.app_config (sent by Supabase in the x-cron-secret header).
+CRON_SECRET=a-long-random-string
+# HMAC key for one-click unsubscribe links (at least 32 random chars).
+EMAIL_TOKEN_SECRET=another-long-random-string-at-least-32-chars
