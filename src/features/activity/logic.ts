@@ -197,3 +197,39 @@ export function activityLabel(r: ActivityRow, types: ActivityTypeRow[]): string 
   const t = types.find((x) => x.id === r.activity_type_id);
   return r.custom_name?.trim() || t?.name || "Activity";
 }
+
+/** Excluded rows (a duplicate the user chose to hide) never appear in lists or totals. */
+export const isVisible = (r: Pick<ActivityRow, "excluded">): boolean => !r.excluded;
+
+const sortByStartDesc = (rows: ActivityRow[]) => [...rows].sort((a, b) => (a.start_time < b.start_time ? 1 : -1));
+
+/**
+ * Merge a server window into the local rows: server rows replace local rows in the window (unless writes are queued, then
+ * the local copy is newer); local rows missing on the server are kept only while writes are queued or when older than the window.
+ * Excluded rows and locally deleted ids are dropped, and an excluded server row also drops its stale local copy.
+ */
+export function mergeActivities(
+  local: ActivityRow[], serverRows: ActivityRow[],
+  opts: { fromIso: string; pendingWrites: boolean; deleted: ReadonlySet<string> },
+): ActivityRow[] {
+  const localById = new Map(local.map((a) => [a.id, a]));
+  const serverIds = new Set(serverRows.map((r) => r.id));
+  const server = serverRows.filter((r) => !opts.deleted.has(r.id))
+    .map((r) => (opts.pendingWrites ? localById.get(r.id) ?? r : r));
+  const localOnly = local.filter((a) => !serverIds.has(a.id) && (opts.pendingWrites || a.start_time < opts.fromIso));
+  return sortByStartDesc([...server, ...localOnly].filter(isVisible));
+}
+
+/** Strava rows show the Strava activity name; everything else shows the type or custom name. */
+export const stravaTitle = (r: ActivityRow, types: ActivityTypeRow[]): string =>
+  (r.source === "strava" && r.name?.trim()) || activityLabel(r, types);
+
+/** Compact detail pieces for a Strava activity (elevation, suffer score, heart rate). */
+export function stravaDetails(r: ActivityRow): string[] {
+  const out: string[] = [];
+  if (r.elevation_m !== null && Number(r.elevation_m) > 0) out.push(`${Math.round(Number(r.elevation_m))} m elevation`);
+  if (r.suffer_score !== null) out.push(`suffer score ${r.suffer_score}`);
+  if (r.avg_hr !== null) out.push(`avg ${r.avg_hr} bpm`);
+  if (r.max_hr !== null) out.push(`max ${r.max_hr} bpm`);
+  return out;
+}

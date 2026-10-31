@@ -1,10 +1,12 @@
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import { bmi as calcBmi } from "@fittrack/shared";
 import { istToday } from "@/lib/time";
 import { useSession } from "@/lib/session";
 import { useProfile } from "@/lib/profile";
 import { supabase } from "@/lib/supabase";
+import { startStravaConnect } from "@/lib/strava";
+import { StravaCard, mapReturnReason, parseReturnParams, stripReturnParams, useStrava } from "@/features/strava";
 import { Disclaimer } from "@/components/Disclaimer";
 import { ErrorState, Spinner } from "@/components/States";
 import { formFromProfile, parseProfileForm, type FormErrors, type ProfileFormState } from "./formModel";
@@ -21,6 +23,30 @@ export function SettingsPage() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [returned] = useState(() => parseReturnParams(window.location.search));
+  const [returnBanner, setReturnBanner] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const handledReturn = useRef(false);
+  const strava = useStrava({ enabled: profile?.activity_tracking_mode === "strava" || returned?.kind === "connected" });
+
+  // Back from Strava: show the outcome, refresh status, clear the query string, and start the first sync.
+  useEffect(() => {
+    if (!returned || handledReturn.current) return;
+    handledReturn.current = true;
+    const search = stripReturnParams(window.location.search);
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${search}${window.location.hash}`);
+    if (returned.kind === "error") {
+      setReturnBanner({ kind: "error", text: mapReturnReason(returned.reason) });
+      return;
+    }
+    setReturnBanner({ kind: "success", text: "Strava connected. Importing your last 90 days of activities..." });
+    void (async () => {
+      await strava.refresh();
+      await refresh();
+      await strava.syncNow("initial");
+    })();
+    // Runs once per page visit; the ref guards against StrictMode's double effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (loading) return <Spinner label="Loading settings" />;
   if (error) return <ErrorState message={`Could not load your profile: ${error}`} onRetry={() => void refresh()} />;
@@ -44,6 +70,13 @@ export function SettingsPage() {
       await refresh();
       setForm(null);
       setMsg({ kind: "success", text: "Targets recalculated" });
+      if (r.value.activityTrackingMode === "strava" && profile?.activity_tracking_mode !== "strava") {
+        try {
+          await startStravaConnect();
+        } catch {
+          setMsg({ kind: "error", text: "Saved, but we could not reach Strava to start the connection. Use Connect Strava below to try again." });
+        }
+      }
     } catch (err) {
       setMsg({ kind: "error", text: err instanceof Error ? err.message : "Could not save settings." });
     } finally {
@@ -69,17 +102,40 @@ export function SettingsPage() {
               <input type="radio" name="tracking" checked={f.trackingMode === "manual"} onChange={() => update((p) => ({ ...p, trackingMode: "manual" }))} />
               Enter manually
             </label>
-            <label className="flex items-center gap-2 text-sm opacity-60">
-              <input type="radio" name="tracking" disabled checked={f.trackingMode === "strava"} readOnly />
-              Strava <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs dark:bg-slate-700">Coming in Phase 2</span>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="radio" name="tracking" checked={f.trackingMode === "strava"} onChange={() => update((p) => ({ ...p, trackingMode: "strava" }))} />
+              Strava (import automatically)
             </label>
           </div>
+          {f.trackingMode === "strava" && profile?.activity_tracking_mode !== "strava" && (
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Save changes to continue to Strava and connect your account.</p>
+          )}
+          {f.trackingMode === "manual" && profile?.activity_tracking_mode === "strava" && (
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Switching to manual stops syncing. Your Strava activities stay in the app.</p>
+          )}
         </fieldset>
 
         <ProfilePreview form={f} />
         {msg && <Banner kind={msg.kind}>{msg.text}</Banner>}
         <button type="submit" disabled={saving} className={primaryBtn}>{saving ? "Saving..." : "Save changes"}</button>
       </form>
+
+      {profile?.activity_tracking_mode === "strava" && (
+        <>
+          {returnBanner && <Banner kind={returnBanner.kind}>{returnBanner.text}</Banner>}
+          <StravaCard strava={strava} />
+        </>
+      )}
+      {profile?.activity_tracking_mode !== "strava" && (
+        <section aria-label="Use Strava" className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
+          <p className="font-medium">Use Strava instead</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Import your activities automatically instead of typing them in.</p>
+          <button type="button" className={`${secondaryBtn} mt-3 w-full`} onClick={() => { setMsg(null); update((p) => ({ ...p, trackingMode: "strava" })); }}>
+            Use Strava instead
+          </button>
+          {returnBanner && <div className="mt-3"><Banner kind={returnBanner.kind}>{returnBanner.text}</Banner></div>}
+        </section>
+      )}
 
       <section className="border-t border-slate-200 pt-4 dark:border-slate-700">
         {user?.email && <p className="mb-2 text-sm text-slate-500 dark:text-slate-400">Signed in as {user.email}</p>}

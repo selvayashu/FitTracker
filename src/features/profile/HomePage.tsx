@@ -1,12 +1,14 @@
 import { Link } from "react-router-dom";
 import { healthyWeightRange, targetDate, weeksToTarget } from "@fittrack/shared";
 import { useProfile } from "@/lib/profile";
+import { StravaSyncChip, useStrava } from "@/features/strava";
 import { Disclaimer } from "@/components/Disclaimer";
 import { EmptyState, ErrorState, Spinner } from "@/components/States";
 import { Banner, BmiGauge, CATEGORY_COLOR, CATEGORY_LABEL, cardCls, fmtDate } from "./ui";
 
 export function HomePage() {
   const { profile, derived, loading, error, refresh } = useProfile();
+  const strava = useStrava({ enabled: profile?.activity_tracking_mode === "strava", autoSync: true });
 
   if (loading) return <Spinner label="Loading your profile" />;
   if (error) return <ErrorState message={`Could not load your profile: ${error}`} onRetry={() => void refresh()} />;
@@ -34,6 +36,7 @@ export function HomePage() {
   return (
     <main className="mx-auto max-w-md space-y-4 p-4 pb-10">
       <h1 className="text-xl font-semibold">{profile.name ? `Hi, ${profile.name}` : "Your summary"}</h1>
+      <StravaSyncChip strava={strava} />
 
       <section className={cardCls} aria-label="BMI">
         <div className="flex items-center justify-between">
