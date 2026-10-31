@@ -43,6 +43,8 @@ export function mapStravaError(code: string, fallback?: string): MappedError {
       return { code, action: "reconnect", message: "Strava is not connected. Connect it to sync your activities." };
     case "strava_revoked":
       return { code, action: "reconnect", message: "Strava access was revoked. Connect Strava again to keep syncing." };
+    case "not_configured":
+      return { code, action: "retry", message: "Strava is not set up on this server yet. Connecting needs a Strava developer app. You can bring your workouts in with a file instead." };
     case "network":
       return { code, action: "retry", message: "Could not reach the server. Check your connection and try again." };
     case "unauthenticated":

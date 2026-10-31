@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { bmi as calcBmi } from "@fittrack/shared";
 import { istToday } from "@/lib/time";
 import { useSession } from "@/lib/session";
@@ -146,6 +146,12 @@ export function SettingsPage() {
           {returnBanner && <div className="mt-3"><Banner kind={returnBanner.kind}>{returnBanner.text}</Banner></div>}
         </section>
       )}
+
+      <section aria-label="Connections" className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
+        <p className="font-medium">Connections</p>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Strava, importing activity files, or adding workouts by hand.</p>
+        <Link to="/connections" className={`${secondaryBtn} mt-3 block w-full text-center`}>Open Connections</Link>
+      </section>
 
       <WeeklyEmailCard />
       <InstallCard />

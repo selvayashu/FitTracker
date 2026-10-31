@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { EmptyState, ErrorState, Spinner } from "@/components/States";
 import { getOutboxState, subscribeOutbox, type OutboxState } from "@/lib/outbox";
 import { useSession } from "@/lib/session";
@@ -20,6 +21,7 @@ import {
 import { ZoneBar } from "./ZoneBar";
 
 const PAGE_DAYS = 14;
+const ImportSheet = lazy(() => import("./import").then((m) => ({ default: m.ImportSheet })));
 
 type SheetState = { prefill?: ActivityPrefill; editing?: ActivityRow } | null;
 
@@ -37,6 +39,7 @@ export function ActivityPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sheet, setSheet] = useState<SheetState>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const userId = user?.id ?? null;
   const { profile } = useProfile();
   const strava = useStrava({ enabled: profile?.activity_tracking_mode === "strava", autoSync: true });
@@ -127,7 +130,14 @@ export function ActivityPage() {
 
   return (
     <div className="mx-auto max-w-md space-y-4 p-4 pb-28">
-      <h1 className="text-xl font-semibold">Activity</h1>
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-xl font-semibold">Activity</h1>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => setImportOpen(true)}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium dark:border-slate-600">Import file</button>
+          <Link to="/connections" className="text-sm text-teal-700 underline dark:text-teal-300">Connections</Link>
+        </div>
+      </div>
       <StravaSyncChip strava={strava} />
 
       {!outbox.online && (
@@ -191,6 +201,11 @@ export function ActivityPage() {
         className="fixed bottom-20 right-4 z-30 rounded-full bg-teal-600 px-5 py-3 text-sm font-medium text-white shadow-lg">
         + Add Activity
       </button>
+      {importOpen && (
+        <Suspense fallback={null}>
+          <ImportSheet onClose={() => setImportOpen(false)} onImported={() => void load()} />
+        </Suspense>
+      )}
       {sheet && <AddActivitySheet prefill={sheet.prefill} editing={sheet.editing} onClose={() => setSheet(null)} />}
     </div>
   );

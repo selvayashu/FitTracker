@@ -45,6 +45,11 @@ describe("error mapping", () => {
   it.each([["not_connected", "reconnect"], ["strava_revoked", "reconnect"], ["network", "retry"], ["unauthenticated", "signin"], ["boom", "retry"]])(
     "%s -> %s", (code, action) => expect(mapStravaError(code).action).toBe(action),
   );
+  it("maps not_configured to a friendly message", () => {
+    const m = mapStravaError("not_configured", "STRAVA_CLIENT_ID missing");
+    expect(m.message).toMatch(/not set up on this server/);
+    expect(m.message).not.toContain("STRAVA_CLIENT_ID");
+  });
   it("includes server text for unknown codes", () => expect(mapStravaError("x", "oops").message).toContain("oops"));
   it("maps return reasons", () => {
     expect(mapReturnReason("access_denied")).toMatch(/cancelled/);
