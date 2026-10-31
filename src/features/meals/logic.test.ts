@@ -31,6 +31,13 @@ describe("OFF mapping", () => {
     expect(f.brand).toBe("Acme");
     expect(f.per100).toEqual({ kcal: 380, protein: 13, carbs: 67, fat: 7, fibre: 10 });
   });
+  it("rejects products whose macros are outside 0..100 g per 100 g", () => {
+    const n = (o: Record<string, unknown>) => ({ code: "1", product_name: "X", nutriments: { "energy-kcal_100g": 100, ...o } });
+    expect(mapOffProduct(n({ proteins_100g: 500 }))).toBeNull();
+    expect(mapOffProduct(n({ fat_100g: 101 }))).toBeNull();
+    expect(mapOffProduct(n({ fat_100g: -1 }))?.per100.fat).toBe(0); // negative values are treated as missing
+    expect(mapOffProduct(n({ proteins_100g: 100, carbohydrates_100g: 0 }))).not.toBeNull();
+  });
   it("defaults missing macros to 0 but skips products without kcal", () => {
     const f = mapOffProduct({ code: "1", product_name: "X", nutriments: { "energy-kcal_100g": "50" } })!;
     expect(f.per100).toEqual({ kcal: 50, protein: 0, carbs: 0, fat: 0, fibre: 0 });

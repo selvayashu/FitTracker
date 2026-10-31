@@ -102,7 +102,10 @@ export async function loadActivities(userId: string, fromIso: string, pendingWri
   const { data, error } = await supabase.from("activities").select("*").eq("user_id", userId)
     .gte("start_time", fromIso).order("start_time", { ascending: false });
   if (error) throw new Error(error.message);
-  const server = ((data as ActivityRow[]) ?? []).filter((r) => !deleted.has(r.id));
+  const localById = new Map(state.activities.map((a) => [a.id, a]));
+  // While writes are queued, a local row is newer than the server copy of the same id.
+  const server = ((data as ActivityRow[]) ?? []).filter((r) => !deleted.has(r.id))
+    .map((r) => (pendingWrites ? localById.get(r.id) ?? r : r));
   const ids = new Set(server.map((r) => r.id));
   const localOnly = state.activities.filter((a) => !ids.has(a.id) && (pendingWrites || a.start_time < fromIso));
   state = { ...state, activities: sortDesc([...server, ...localOnly]) };

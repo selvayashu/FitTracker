@@ -1,5 +1,7 @@
 import { useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
+import { bmi as calcBmi } from "@fittrack/shared";
+import { istToday } from "@/lib/time";
 import { useSession } from "@/lib/session";
 import { useProfile } from "@/lib/profile";
 import { supabase } from "@/lib/supabase";
@@ -8,7 +10,7 @@ import { ErrorState, Spinner } from "@/components/States";
 import { formFromProfile, parseProfileForm, type FormErrors, type ProfileFormState } from "./formModel";
 import { ProfileFields, ProfilePreview } from "./ProfileFields";
 import { buildProfileUpdate } from "./saveProfile";
-import { persistProfile } from "./persist";
+import { persistProfile, upsertWeightLog } from "./persist";
 import { Banner, primaryBtn, secondaryBtn } from "./ui";
 
 export function SettingsPage() {
@@ -35,6 +37,10 @@ export function SettingsPage() {
     setMsg(null);
     try {
       await persistProfile(user.id, buildProfileUpdate(r.value, profile?.max_hr ?? null));
+      // Keep the weight history in step with the profile so Home, Weight and the trend agree.
+      if (profile?.weight_kg !== r.value.weightKg) {
+        await upsertWeightLog(user.id, istToday(), r.value.weightKg, calcBmi(r.value.weightKg, r.value.heightCm));
+      }
       await refresh();
       setForm(null);
       setMsg({ kind: "success", text: "Targets recalculated" });

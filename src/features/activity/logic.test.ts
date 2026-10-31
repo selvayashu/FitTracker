@@ -16,6 +16,12 @@ const base = (o: Partial<ActivityFormValues> = {}): ActivityFormValues => ({
 const errs = (o: Partial<ActivityFormValues>) => validateForm(base(o), types, TODAY);
 
 describe("validateForm", () => {
+  it("rejects a start time later than now on the same IST day", () => {
+    // 2026-03-10 06:30 IST = 01:00Z. "now" is 06:00 IST, so 06:30 is in the future and 05:59 is not.
+    const now = new Date("2026-03-10T00:30:00Z");
+    expect(validateForm(base({ time: "06:30" }), types, TODAY, now).time).toMatch(/future/);
+    expect(validateForm(base({ time: "05:59" }), types, TODAY, now).time).toBeUndefined();
+  });
   it("accepts a valid form", () => expect(errs({})).toEqual({}));
   it.each([["00:00", true], ["00:01", false], ["10:00", false], ["10:01", true]])("duration %s error=%s", (d, bad) => {
     expect(!!errs({ duration: d }).duration).toBe(bad);

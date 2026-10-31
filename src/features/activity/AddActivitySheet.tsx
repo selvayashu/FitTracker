@@ -81,8 +81,14 @@ export function AddActivitySheet({ onClose, prefill, editing }: AddActivitySheet
     });
     if (!row) return;
     setSaving(true);
-    await saveActivity(row);
-    onClose();
+    try {
+      await saveActivity(row);
+      onClose();
+    } catch {
+      setNote("Could not save this activity on your device. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function saveAsTemplate() {

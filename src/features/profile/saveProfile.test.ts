@@ -34,6 +34,10 @@ describe("buildProfileUpdate", () => {
     expect(buildProfileUpdate(input, 188, now).max_hr).toBe(188);
     expect(buildDerivedColumns(input, 150, now).max_hr).toBe(150);
   });
+  it("resets max_hr to 220 - age when the field is cleared (null)", () => {
+    const u = buildProfileUpdate({ ...input, maxHr: null }, 150, now);
+    expect(u.max_hr).toBe(computeProfileDerived(input, now).maxHr);
+  });
   it("uses an explicit max_hr override over the existing one", () => {
     expect(buildProfileUpdate({ ...input, maxHr: 175 }, 188, now).max_hr).toBe(175);
   });

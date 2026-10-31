@@ -71,6 +71,9 @@ export function mapOffProduct(p: OffProduct): FoodItem | null {
   const n = p.nutriments ?? {};
   const kcal = num(n["energy-kcal_100g"]);
   if (kcal === null || kcal > MAX_KCAL_PER_100G) return null;
+  // Macros are grams per 100 g, so anything outside 0..100 is bad data.
+  const macros = [n["proteins_100g"], n["carbohydrates_100g"], n["fat_100g"], n["fiber_100g"]].map(num);
+  if (macros.some((m) => m !== null && (m < 0 || m > 100))) return null;
   const brand = p.brands?.split(",")[0]?.trim() || undefined;
   return {
     source: "off", food_id: null, custom_food_id: null, external_ref: `off:${code}`,

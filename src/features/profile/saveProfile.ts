@@ -50,7 +50,8 @@ export function buildDerivedColumns(input: ProfileInput, existingMaxHr: number |
 /** All columns written when the user saves the profile form. Single source of truth for onboarding and settings. */
 export function buildProfileUpdate(input: ProfileSaveInput, existingMaxHr: number | null, now?: Date) {
   const derived = computeProfileDerived(input, now);
-  const maxHr = input.maxHr ?? existingMaxHr ?? derived.maxHr;
+  // null means the user cleared the field, so go back to the default (220 - age); undefined means "not provided".
+  const maxHr = input.maxHr === null ? derived.maxHr : (input.maxHr ?? existingMaxHr ?? derived.maxHr);
   return {
     ...(input.name !== undefined ? { name: input.name } : {}),
     sex: input.sex,

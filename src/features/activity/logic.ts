@@ -37,7 +37,7 @@ function num(text: string): number | null {
 }
 
 /** Validate the form. `today` is the IST date (YYYY-MM-DD) used for the "not in the future" rule. */
-export function validateForm(v: ActivityFormValues, types: ActivityTypeRow[], today: string): FormErrors {
+export function validateForm(v: ActivityFormValues, types: ActivityTypeRow[], today: string, now: Date = new Date()): FormErrors {
   const e: FormErrors = {};
   const type = types.find((t) => t.id === v.typeId);
   if (!type) e.typeId = "Choose an activity type.";
@@ -45,6 +45,7 @@ export function validateForm(v: ActivityFormValues, types: ActivityTypeRow[], to
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v.date)) e.date = "Choose a date.";
   else if (v.date > today) e.date = "Date cannot be in the future.";
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(v.time)) e.time = "Enter a start time (HH:mm).";
+  else if (!e.date && v.date === today && new Date(toUtcIso(v.date, v.time)) > now) e.time = "Start time cannot be in the future.";
 
   const dur = parseDuration(v.duration);
   if (v.duration.trim() === "") e.duration = "Duration is required (hh:mm).";

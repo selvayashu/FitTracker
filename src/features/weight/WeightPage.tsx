@@ -37,6 +37,18 @@ export function WeightPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // If the page stays open past IST midnight, move the entry date to the new day (unless the user picked another date).
+  useEffect(() => {
+    let lastToday = istToday();
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = istToday();
+      if (now !== lastToday) { setDate((d) => (d === lastToday ? now : d)); lastToday = now; }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
   /** Push the weight of the latest log (or a given weight) into the profile and recompute every derived column. */
   const syncProfile = async (weightKg: number) => {
     const input = toProfileInput(profile);
