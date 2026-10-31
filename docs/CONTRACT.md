@@ -44,6 +44,22 @@ computeProfileDerived(p: ProfileInput, now?: Date): ProfileDerived
 
 Default unit grams when a food has no override: g=1, ml=1, tbsp=15, cup=240, katori=150, plate=250, piece=`serving_g`.
 
+## Feature entry points (Step 2)
+
+Each feature exposes exactly these exports from its `index.ts`; the orchestrator wires them into routes in `src/App.tsx`.
+
+| Feature | Exports | Route |
+|---|---|---|
+| auth | `LoginPage` (email/password sign-in + sign-up, Google button, password reset) | `/login` |
+| profile | `OnboardingPage` (profile form + "How will you track activity?"), `HomePage` (BMI card/gauge, calorie target, macro targets, healthy range, ETA, warnings, link to weight), `SettingsPage` (edit profile, BMI standard, add-back %, max HR, tracking mode, sign out) | `/onboarding`, `/`, `/settings` |
+| weight | `WeightPage` (log weight, history list, BMI trend chart with Recharts) | `/weight` |
+| meals | `MealsPage` (4 slots, food search, quantity/unit, custom foods, favourites, copy yesterday, daily totals) | `/meals` |
+| activity | `ActivityPage` (list, edit/delete, quick-add, templates) and `AddActivitySheet({ onClose, prefill? })` (opened from a floating "+ Add Activity" button that `ActivityPage` also renders) | `/activity` |
+
+Saving the profile: compute the derived fields with `computeProfileDerived`, write both inputs and derived columns (bmi, bmr, tdee, daily_kcal_target, protein/carb/fat targets, max_hr default if null) to `profiles`, set `onboarded = true`, then call `useProfile().refresh()`. Saving a weight: insert/upsert `weight_logs` (date, weight_kg, bmi), update `profiles.weight_kg` and all derived columns, then `refresh()`.
+
+Pages must handle `useProfile()` returning `loading`, `error` or an incomplete profile (`derived === null`): show a "Complete your profile" empty state linking to `/onboarding` where relevant.
+
 ## Conventions for app code
 
 - Supabase client lives in `src/lib/supabase.ts` (orchestrator). Features import `supabase` and `useSession()` from `@/lib/*`.
