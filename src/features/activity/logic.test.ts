@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityRow, ActivityTypeRow } from "@/lib/database.types";
 import {
-  buildActivityRow, cloneForRepeat, daySummary, emptyForm, estimateKcal, groupByIstDate, rowToForm,
+  buildActivityRow, cloneForRepeat, daySummary, emptyForm, estimateKcal, groupByIstDate, mergeActivities, rowToForm, stravaDetails, stravaTitle,
   templateFromForm, templateFromRow, templateToPrefill, validateForm, type ActivityFormValues,
 } from "./logic";
 
@@ -144,5 +144,41 @@ describe("grouping and summary", () => {
   it("summary", () => {
     expect(daySummary([row(), row({ calories: null, calories_estimated: false, duration_min: 15 })])).toEqual({ minutes: 60, kcal: 400, anyEstimated: true });
     expect(daySummary([])).toEqual({ minutes: 0, kcal: 0, anyEstimated: false });
+  });
+});
+
+describe("excluded rows and merge", () => {
+  const FROM = "2026-03-01T00:00:00.000Z";
+  const none = new Set<string>();
+  it("drops excluded server rows and their stale local copy", () => {
+    const out = mergeActivities([row({ id: "a" })], [row({ id: "a", excluded: true }), row({ id: "b" })], { fromIso: FROM, pendingWrites: false, deleted: none });
+    expect(out.map((r) => r.id)).toEqual(["b"]);
+  });
+  it("keeps local-only rows while writes are pending, or older than the window", () => {
+    const local = [row({ id: "new", source: "manual" }), row({ id: "old", start_time: "2026-02-01T00:00:00.000Z" })];
+    expect(mergeActivities(local, [], { fromIso: FROM, pendingWrites: false, deleted: none }).map((r) => r.id)).toEqual(["old"]);
+    expect(mergeActivities(local, [], { fromIso: FROM, pendingWrites: true, deleted: none }).map((r) => r.id).sort()).toEqual(["new", "old"]);
+  });
+  it("skips locally deleted ids and prefers local copy while pending", () => {
+    const out = mergeActivities([row({ id: "a", notes: "local" })], [row({ id: "a", notes: "server" }), row({ id: "gone" })],
+      { fromIso: FROM, pendingWrites: true, deleted: new Set(["gone"]) });
+    expect(out).toHaveLength(1);
+    expect(out[0].notes).toBe("local");
+  });
+  it("excluded rows do not count in the day summary once filtered", () => {
+    const rows = [row({ id: "x", excluded: true }), row({ id: "y" })].filter((r) => !r.excluded);
+    expect(daySummary(rows).minutes).toBe(45);
+  });
+});
+
+describe("strava display", () => {
+  it("uses the Strava name, falling back to the type", () => {
+    expect(stravaTitle(row({ name: "Morning Run" }), types)).toBe("Morning Run");
+    expect(stravaTitle(row({ name: " " }), types)).toBe("Running");
+    expect(stravaTitle(row({ source: "manual", name: "Ignored" }), types)).toBe("Running");
+  });
+  it("lists elevation, suffer score and heart rate", () => {
+    expect(stravaDetails(row({ elevation_m: 120.4, suffer_score: 33 }))).toEqual(["120 m elevation", "suffer score 33", "avg 150 bpm", "max 170 bpm"]);
+    expect(stravaDetails(row({ avg_hr: null, max_hr: null }))).toEqual([]);
   });
 });

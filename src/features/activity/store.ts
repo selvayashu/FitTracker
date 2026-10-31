@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { enqueue } from "@/lib/outbox";
 import { supabase } from "@/lib/supabase";
-import type { ActivityRow, ActivityTemplateRow, ActivityTypeRow } from "@/lib/database.types";
-import type { ActivityWrite } from "./logic";
+import type { ActivityHrZoneRow, ActivityRow, ActivityTemplateRow, ActivityTypeRow } from "@/lib/database.types";
+import { PHASE2_COLUMNS, isVisible, mergeActivities, type ActivityWrite } from "./logic";
 
 /**
  * Local optimistic state + localStorage cache shared by the page and the sheet.
@@ -65,7 +65,12 @@ export async function saveActivity(w: ActivityWrite) {
   deleted.delete(w.id);
   state = { ...state, activities: sortDesc([...state.activities.filter((a) => a.id !== w.id), toRow(w)]) };
   persist(); emit();
-  await enqueue({ kind: "upsert", table: "activities", row: { ...w } });
+  // Strava-owned and review columns are never sent: an upsert only updates the columns it carries, so a notes edit
+  // cannot overwrite excluded/duplicate_dismissed (or the Strava fields) with a stale local copy.
+  const row: Record<string, unknown> & { id: string } = { ...w };
+  for (const c of PHASE2_COLUMNS) delete row[c];
+  if (w.source === "strava") delete row.duplicate_of;
+  await enqueue({ kind: "upsert", table: "activities", row });
 }
 
 export async function deleteActivity(id: string) {
@@ -104,13 +109,46 @@ export async function loadActivities(userId: string, fromIso: string, pendingWri
   const { data, error } = await supabase.from("activities").select("*").eq("user_id", userId)
     .gte("start_time", fromIso).order("start_time", { ascending: false });
   if (error) throw new Error(error.message);
-  const localById = new Map(state.activities.map((a) => [a.id, a]));
-  // While writes are queued, a local row is newer than the server copy of the same id.
-  const server = ((data as ActivityRow[]) ?? []).filter((r) => !deleted.has(r.id))
-    .map((r) => (pendingWrites ? localById.get(r.id) ?? r : r));
-  const ids = new Set(server.map((r) => r.id));
-  const localOnly = state.activities.filter((a) => !ids.has(a.id) && (pendingWrites || a.start_time < fromIso));
-  state = { ...state, activities: sortDesc([...server, ...localOnly]) };
+  state = { ...state, activities: mergeActivities(state.activities, (data as ActivityRow[]) ?? [], { fromIso, pendingWrites, deleted }) };
+  persist(); emit();
+}
+
+/** After the manual twin is deleted, the Strava row no longer points at it (the DB does the same via ON DELETE SET NULL). */
+export function clearDuplicateLink(id: string) {
+  state = { ...state, activities: state.activities.map((a) => (a.id === id ? { ...a, duplicate_of: null } : a)) };
+  persist(); emit();
+}
+
+/** Drop every Strava row from the local cache (after "Disconnect and delete synced activities"). */
+export function removeStravaLocal() {
+  state = { ...state, activities: state.activities.filter((a) => a.source !== "strava") };
+  persist(); emit();
+}
+
+/** HR zone rows for the given activities, keyed by activity id. One query. */
+export async function loadHrZones(activityIds: string[]): Promise<Map<string, ActivityHrZoneRow>> {
+  if (activityIds.length === 0) return new Map();
+  const { data, error } = await supabase.from("activity_hr_zones").select("*").in("activity_id", activityIds);
+  if (error) throw new Error(error.message);
+  return new Map(((data as ActivityHrZoneRow[]) ?? []).map((z) => [z.activity_id, z]));
+}
+
+/** Fetch specific activities by id (the "other" row of a duplicate pair that is outside the loaded window). */
+export async function fetchActivitiesById(ids: string[]): Promise<ActivityRow[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase.from("activities").select("*").in("id", ids);
+  if (error) throw new Error(error.message);
+  return (data as ActivityRow[]) ?? [];
+}
+
+/** Direct (online-only) update of Strava-row review flags. Throws with a readable message on failure. */
+export async function updateActivityFlags(id: string, patch: { excluded?: true; duplicate_dismissed?: true }): Promise<void> {
+  const { error } = await supabase.from("activities").update(patch).eq("id", id);
+  if (error) throw new Error(error.message);
+  state = {
+    ...state,
+    activities: state.activities.map((a) => (a.id === id ? { ...a, ...patch } : a)).filter(isVisible),
+  };
   persist(); emit();
 }
 
