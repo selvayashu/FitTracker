@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { SyncBadge } from "./SyncBadge";
+import { PwaPrompt } from "./PwaPrompt";
 
 const TABS = [
   { to: "/", label: "Today", end: true },
@@ -14,6 +15,7 @@ export function AppShell() {
   return (
     <div className="mx-auto flex min-h-screen max-w-md flex-col">
       <SyncBadge />
+      <PwaPrompt />
       <main className="flex-1 px-4 pb-24 pt-4">
         <Outlet />
       </main>
