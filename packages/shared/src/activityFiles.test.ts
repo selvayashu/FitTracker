@@ -600,7 +600,7 @@ describe("(n) mapFileSport", () => {
     expect(mapFileSport("1")).toEqual({ typeName: "Other", custom: "Workout" });
     expect(mapFileSport("Other")).toEqual({
       typeName: "Other",
-      custom: "Other",
+      custom: "Workout",
     });
   });
 });
@@ -757,5 +757,164 @@ describe("(p) hrZoneSecondsForWorkout", () => {
       ),
     );
     expect(hrZoneSecondsForWorkout(p, 200)).toEqual([10, 10, 10, 0, 10]);
+  });
+});
+
+describe("review regressions", () => {
+  const ptXml = (lat: number, t: string) =>
+    `<trkpt lat="${lat}" lon="1"><time>${t}</time></trkpt>`;
+  const blank: ParsedWorkout = {
+    format: "gpx",
+    name: null,
+    sportHint: null,
+    startTime: "2026-03-10T01:00:00.000Z",
+    elapsedSec: 1800,
+    movingSec: 1800,
+    distanceKm: null,
+    avgHr: null,
+    maxHr: null,
+    calories: null,
+    elevationGainM: null,
+    hr: null,
+    timeWasAssumed: false,
+    warnings: [],
+  };
+
+  it("1: deeply nested <trk> is linear and does not duplicate points", () => {
+    const n = 8000;
+    const pts =
+      ptXml(1, "2026-03-10T01:00:00Z") + ptXml(1.001, "2026-03-10T01:10:00Z");
+    const xml = `<gpx>${"<trk>".repeat(n)}${pts}${"</trk>".repeat(n)}</gpx>`;
+    const t0 = Date.now();
+    const ws = ok(xml);
+    expect(Date.now() - t0).toBeLessThan(150);
+    expect(ws).toHaveLength(1);
+    expect(ws[0].elapsedSec).toBe(600);
+    expect(ws[0].distanceKm).toBeCloseTo(0.1112, 3);
+  });
+  it("1: nested TCX Activity and Lap are not double counted", () => {
+    const tp = (s: number) =>
+      `<Trackpoint><Time>${isoAt("2026-03-10T01:00:00Z", s)}</Time><HeartRateBpm><Value>120</Value></HeartRateBpm></Trackpoint>`;
+    const xml = `<TrainingCenterDatabase><Activities><Activity Sport="Running"><Id>2026-03-10T01:00:00Z</Id>
+<Lap StartTime="2026-03-10T01:00:00Z"><Lap><Track>${tp(0)}${tp(30)}</Track></Lap></Lap>
+<Activity Sport="Biking"><Lap><Track>${tp(60)}</Track></Lap></Activity></Activity></Activities></TrainingCenterDatabase>`;
+    const ws = ok(xml);
+    expect(ws).toHaveLength(1);
+    expect(ws[0].hr?.heartrate).toHaveLength(3);
+  });
+
+  it("2: caps the number of elements", () => {
+    const r = parseActivityFile(`<gpx>${"<a/>".repeat(500_001)}</gpx>`);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/too many elements/);
+    const small = parseActivityFile(`<gpx>${"<a/>".repeat(1000)}</gpx>`);
+    expect(small.ok).toBe(false);
+    if (!small.ok) expect(small.error).not.toMatch(/too many/);
+  });
+
+  it("3: HR zone seconds are whole numbers", () => {
+    const w = {
+      ...blank,
+      hr: { time: [0, 1.3, 2.6], heartrate: [100, 130, 150] },
+    };
+    const z = hrZoneSecondsForWorkout(w, 200) as number[];
+    expect(z.every((v) => Number.isInteger(v) && v >= 0)).toBe(true);
+    expect(z).toEqual([1, 1, 1, 0, 0]);
+    expect(Math.abs(z.reduce((a, b) => a + b, 0) - 3.9)).toBeLessThanOrEqual(2);
+  });
+
+  it("4: rejects invalid calendar dates and bad offsets, handles early years", () => {
+    const xmlFor = (t: string) =>
+      `<gpx><trk><trkseg><trkpt lat="1" lon="1"><time>${t}</time></trkpt><trkpt lat="1" lon="1"><time>2024-03-10T01:05:00Z</time></trkpt></trkseg></trk></gpx>`;
+    const bad = [
+      "2024-02-31T10:00:00Z",
+      "2023-02-29T10:00:00Z",
+      "2024-04-31T10:00:00Z",
+      "2024-03-10T24:00:01Z",
+      "2024-03-10T25:00:00Z",
+      "2024-03-10T10:00:00+15:00",
+      "2024-03-10T10:00:00+05:75",
+    ];
+    for (const t of bad) {
+      const ws = ok(xmlFor(t));
+      expect(ws[0].startTime).toBe("2024-03-10T01:05:00.000Z");
+      expect(ws[0].warnings).toContain(
+        "Some timestamps could not be read and were ignored.",
+      );
+    }
+    expect(ok(xmlFor("2024-02-29T10:00:00Z"))[0].startTime).toBe(
+      "2024-02-29T10:00:00.000Z",
+    );
+    expect(ok(xmlFor("0050-03-10T10:00:00Z"))[0].startTime).toBe(
+      "0050-03-10T10:00:00.000Z",
+    );
+    expect(ok(xmlFor("2024-03-10T10:00:00+14:00"))[0].startTime).toBe(
+      "2024-03-09T20:00:00.000Z",
+    );
+  });
+
+  it("5: validate rejects years before 2000", () => {
+    const w = ok(
+      gpx(
+        `<trk><trkseg>${gpxPts([{ sec: 0 }, { sec: 600 }], "1970-01-01T00:00:00Z")}</trkseg></trk>`,
+      ),
+    )[0];
+    expect(
+      validateParsedWorkout(w, new Date("2026-06-01T00:00:00Z")),
+    ).toContain("The date in this file looks wrong (before 2000).");
+  });
+
+  it("6: unquoted attribute before /> self-closes", () => {
+    const xml = `<gpx><trk><trkseg><trkpt lat=1 lon=2/><trkpt lat=1 lon=2><time>2026-03-10T01:00:00Z</time></trkpt><trkpt lat=1 lon=2/><trkpt lat="1" lon="2"><time>2026-03-10T01:10:00Z</time></trkpt></trkseg></trk></gpx>`;
+    expect(ok(xml)[0].elapsedSec).toBe(600);
+  });
+
+  it("7: mapFileSport word boundaries and ordering", () => {
+    const t = (h: string) => mapFileSport(h).typeName;
+    expect(t("stride")).toBe("Other");
+    expect(t("Stride training")).toBe("Other");
+    expect(t("skipper")).toBe("Other");
+    expect(t("skip")).toBe("Skipping");
+    expect(t("Treadmill walking")).toBe("Walking");
+    expect(t("Walking (Treadmill)")).toBe("Walking");
+    expect(t("Treadmill")).toBe("Running");
+    expect(t("Treadmill running")).toBe("Running");
+    expect(mapFileSport("Other")).toEqual({
+      typeName: "Other",
+      custom: "Workout",
+    });
+    expect(mapFileSport("Generic")).toEqual({
+      typeName: "Other",
+      custom: "Workout",
+    });
+  });
+
+  it("8: buildImportRow keeps the mapped name when the type id is missing", () => {
+    const r = buildImportRow(
+      { ...blank, sportHint: "cycling" },
+      {
+        userId: "u",
+        id: "i",
+        fileName: "f.gpx",
+        typeIdByName: { Other: 18 },
+        metByTypeId: {},
+        weightKg: null,
+        maxHr: null,
+      },
+    );
+    expect(r.activity_type_id).toBe(18);
+    expect(r.custom_name).toBe("Cycling");
+  });
+
+  it("9: slices a huge sport hint", () => {
+    const big = "x".repeat(1_000_000);
+    const g = ok(
+      gpx(
+        `<trk><type>${big}</type><trkseg>${gpxPts([{ sec: 0 }, { sec: 600 }])}</trkseg></trk>`,
+      ),
+    );
+    expect(g[0].sportHint).toHaveLength(200);
+    const tcx = `<TrainingCenterDatabase><Activities><Activity Sport="${big}"><Id>2026-03-10T01:00:00Z</Id><Lap><TotalTimeSeconds>600</TotalTimeSeconds></Lap></Activity></Activities></TrainingCenterDatabase>`;
+    expect(ok(tcx)[0].sportHint).toHaveLength(200);
   });
 });
