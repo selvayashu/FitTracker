@@ -2,7 +2,7 @@ import { useState } from "react";
 import { startStravaConnect, StravaApiError } from "@/lib/strava";
 import { Spinner } from "@/components/States";
 import { Banner, cardCls, primaryBtn, secondaryBtn } from "@/features/profile/ui";
-import { formatCountdown, lastSyncText, mapStravaError, needsReconnect, progressText } from "./logic";
+import { formatCountdown, friendlyStatusError, lastSyncText, mapStravaError, needsReconnect, progressText } from "./logic";
 import type { UseStrava } from "./useStrava";
 
 /** Settings card: status, connect, sync now, disconnect (with an opt-in to delete synced activities). */
@@ -45,7 +45,7 @@ export function StravaCard({ strava }: { strava: UseStrava }) {
 
       {statusLoading && !status ? <Spinner label="Checking Strava" /> : statusError && !status ? (
         <div className="space-y-2">
-          <Banner kind="error">Could not check your Strava connection: {statusError}</Banner>
+          <Banner kind="error">Could not check your Strava connection. {friendlyStatusError(statusError)}</Banner>
           <button type="button" className={secondaryBtn} onClick={() => void strava.refresh()}>Try again</button>
         </div>
       ) : status?.connected ? (
