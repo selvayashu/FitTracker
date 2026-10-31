@@ -781,13 +781,15 @@ describe("review regressions", () => {
   };
 
   it("1: deeply nested <trk> is linear and does not duplicate points", () => {
-    const n = 8000;
+    // 40,000 levels: a quadratic implementation needs many seconds here (about 13 s measured by extrapolation from
+    // 8,000 levels = 552 ms), a linear one well under one. The generous bound keeps the test stable on a loaded machine.
+    const n = 40000;
     const pts =
       ptXml(1, "2026-03-10T01:00:00Z") + ptXml(1.001, "2026-03-10T01:10:00Z");
     const xml = `<gpx>${"<trk>".repeat(n)}${pts}${"</trk>".repeat(n)}</gpx>`;
     const t0 = Date.now();
     const ws = ok(xml);
-    expect(Date.now() - t0).toBeLessThan(150);
+    expect(Date.now() - t0).toBeLessThan(4000);
     expect(ws).toHaveLength(1);
     expect(ws[0].elapsedSec).toBe(600);
     expect(ws[0].distanceKm).toBeCloseTo(0.1112, 3);
