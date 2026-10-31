@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { SessionProvider } from "@/lib/session";
 import { ProfileProvider } from "@/lib/profile";
@@ -6,9 +7,13 @@ import { PublicOnly, RequireAuth } from "@/components/RouteGuards";
 import { LoginPage, ResetPasswordPage } from "@/features/auth";
 import { OnboardingPage, HomePage, SettingsPage } from "@/features/profile";
 import { DashboardPage } from "@/features/dashboard";
-import { WeightPage } from "@/features/weight";
 import { MealsPage } from "@/features/meals";
 import { ActivityPage } from "@/features/activity";
+import { Spinner } from "@/components/States";
+
+// Recharts is large: load the chart screens on demand so the first screen stays small.
+const ReportsPage = lazy(() => import("@/features/reports").then((m) => ({ default: m.ReportsPage })));
+const WeightPage = lazy(() => import("@/features/weight").then((m) => ({ default: m.WeightPage })));
 
 export default function App() {
   return (
@@ -27,7 +32,8 @@ export default function App() {
                 <Route path="/health" element={<HomePage />} />
                 <Route path="/meals" element={<MealsPage />} />
                 <Route path="/activity" element={<ActivityPage />} />
-                <Route path="/weight" element={<WeightPage />} />
+                <Route path="/weight" element={<Suspense fallback={<Spinner />}><WeightPage /></Suspense>} />
+                <Route path="/reports" element={<Suspense fallback={<Spinner />}><ReportsPage /></Suspense>} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Route>
