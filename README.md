@@ -162,4 +162,4 @@ docs/                 Plan, prototype, Phase 1 contract
 1. Auth, profile, BMI and calorie target, weight log, meals, manual activity (done, awaiting your testing)
 2. Strava connect, sync, heart-rate zones, duplicate handling (done, awaiting your testing)
 3. Dashboard and reports (done, awaiting your testing)
-4. PWA polish, PDF/CSV export, weekly email (in progress)
+4. PWA polish, PDF/CSV export, weekly email (done, awaiting your testing)
