@@ -79,7 +79,9 @@ export function estimateKcal(
   return metKcal({ met: metForIntensity(type, intensity), weightKg, durationMin });
 }
 
-export type ActivityWrite = Omit<ActivityRow, "created_at" | "updated_at">;
+/** Columns owned by the Strava sync and the duplicate review; manual writes never send them (the DB has defaults). */
+export const PHASE2_COLUMNS = ["name", "elevation_m", "suffer_score", "moving_time_s", "elapsed_time_s", "excluded", "duplicate_dismissed"] as const;
+export type ActivityWrite = Omit<ActivityRow, "created_at" | "updated_at" | (typeof PHASE2_COLUMNS)[number]>;
 
 export interface BuildCtx { id: string; userId: string; weightKg: number | null | undefined; source?: ActivityRow["source"]; stravaId?: number | null }
 

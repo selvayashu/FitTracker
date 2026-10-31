@@ -56,7 +56,9 @@ const sortDesc = (rows: ActivityRow[]) => [...rows].sort((a, b) => (a.start_time
 function toRow(w: ActivityWrite): ActivityRow {
   const now = new Date().toISOString();
   const prev = state.activities.find((a) => a.id === w.id);
-  return { ...w, created_at: prev?.created_at ?? now, updated_at: now };
+  // Strava/duplicate columns are not part of a manual write: keep the existing values, else the DB defaults.
+  const phase2 = { name: null, elevation_m: null, suffer_score: null, moving_time_s: null, elapsed_time_s: null, excluded: false, duplicate_dismissed: false };
+  return { ...phase2, ...prev, ...w, created_at: prev?.created_at ?? now, updated_at: now };
 }
 
 export async function saveActivity(w: ActivityWrite) {

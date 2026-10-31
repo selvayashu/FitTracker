@@ -1,7 +1,7 @@
 /**
  * Phase 1 database contract (hand-maintained). Migrations in supabase/migrations MUST match these shapes.
  * Timestamps are ISO strings in UTC; dates are YYYY-MM-DD.
- * Phase 2 adds: strava_connections, activity_hr_zones.
+ * Phase 2 adds: activity_hr_zones (below) and strava_connections (server-only, never read by the browser).
  */
 import type {
   ActivityLevel, ActivitySource, ActivityTrackingMode, BmiStandard, Goal, Intensity, MealType, Sex,
@@ -70,7 +70,15 @@ export interface ActivityRow {
   calories: number | null;
   calories_estimated: boolean;
   notes: string | null;
-  duplicate_of: string | null;   // reserved for Phase 2
+  duplicate_of: string | null;   // Phase 2: Strava row points at the overlapping manual row (FK, on delete set null)
+  // Phase 2 additions (null/false for manual rows)
+  name: string | null;           // Strava activity name
+  elevation_m: number | null;
+  suffer_score: number | null;
+  moving_time_s: number | null;
+  elapsed_time_s: number | null;
+  excluded: boolean;             // hidden duplicate; ignored by lists and daily_summaries
+  duplicate_dismissed: boolean;  // user said "not a duplicate"
   created_at: string;
   updated_at: string;
 }
@@ -154,4 +162,16 @@ export interface DailySummaryRow {
   active_minutes: number;
   workouts: number;
   updated_at: string;
+}
+
+export interface ActivityHrZoneRow {
+  activity_id: string;           // PK, FK activities on delete cascade
+  user_id: string;
+  zone1_s: number;
+  zone2_s: number;
+  zone3_s: number;
+  zone4_s: number;
+  zone5_s: number;
+  max_hr_used: number;
+  created_at: string;
 }

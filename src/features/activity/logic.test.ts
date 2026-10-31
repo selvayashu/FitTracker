@@ -102,6 +102,7 @@ const row = (o: Partial<ActivityRow> = {}): ActivityRow => ({
   id: "r1", user_id: "u1", source: "strava", strava_id: 55, activity_type_id: 3, custom_name: null,
   start_time: "2026-03-09T20:00:00.000Z", duration_min: 45, distance_km: 5, steps: null, intensity: "vigorous",
   avg_hr: 150, max_hr: 170, calories: 400, calories_estimated: true, notes: "n", duplicate_of: "z",
+  name: null, elevation_m: null, suffer_score: null, moving_time_s: null, elapsed_time_s: null, excluded: false, duplicate_dismissed: false,
   created_at: "", updated_at: "", ...o,
 });
 
