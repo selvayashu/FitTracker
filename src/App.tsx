@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { PublicOnly, RequireAuth } from "@/components/RouteGuards";
 import { LoginPage, ResetPasswordPage } from "@/features/auth";
 import { OnboardingPage, HomePage, SettingsPage } from "@/features/profile";
+import { DashboardPage } from "@/features/dashboard";
 import { WeightPage } from "@/features/weight";
 import { MealsPage } from "@/features/meals";
 import { ActivityPage } from "@/features/activity";
@@ -22,7 +23,8 @@ export default function App() {
             <Route element={<RequireAuth />}>
               <Route path="/onboarding" element={<OnboardingPage />} />
               <Route element={<AppShell />}>
-                <Route index element={<HomePage />} />
+                <Route index element={<DashboardPage />} />
+                <Route path="/health" element={<HomePage />} />
                 <Route path="/meals" element={<MealsPage />} />
                 <Route path="/activity" element={<ActivityPage />} />
                 <Route path="/weight" element={<WeightPage />} />
