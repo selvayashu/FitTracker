@@ -2,10 +2,10 @@ import { NavLink, Outlet } from "react-router-dom";
 import { SyncBadge } from "./SyncBadge";
 
 const TABS = [
-  { to: "/", label: "Home", end: true },
+  { to: "/", label: "Today", end: true },
   { to: "/meals", label: "Meals" },
   { to: "/activity", label: "Activity" },
-  { to: "/weight", label: "Weight" },
+  { to: "/reports", label: "Reports" },
   { to: "/settings", label: "Settings" },
 ];
 
