@@ -12,19 +12,22 @@ import { signState, timingSafeEqualStr, verifyState } from "./state";
 import { REQUIRED_SCOPE, StravaHttpError, buildAuthorizeUrl } from "./strava";
 import {
   LEASE_MS,
+  ConfigError,
   RevokedError,
   UpstreamError,
   ensureFreshToken,
+  freshConnection,
   initialCursor,
   prepareCursor,
   runSyncBatch,
   syncSingleActivity,
 } from "./syncEngine";
 import type { EngineDeps } from "./syncEngine";
+import type { Connection } from "./store";
 
 export interface HandlerDeps extends EngineDeps {
   verifyToken(token: string): Promise<string | null>;
-  config: { clientId: string; stateSecret: string; webhookVerifyToken: string };
+  config: { clientId: string; stateSecret: string; webhookVerifyToken: string; subscriptionId?: string };
 }
 
 const nowSec = (d: EngineDeps) => Math.floor(d.nowMs() / 1000);
@@ -119,7 +122,8 @@ export async function handleSync(request: Request, deps: HandlerDeps): Promise<R
       prepareCursor(mode, conn.last_sync_at, nowSec(deps)),
     );
     if (!cursor) {
-      const busy: SyncResult = { done: false, processed: 0, remaining: null };
+      // `busy` is an extra field (SyncResult in the frozen shared package has no such member): wait and retry.
+      const busy: SyncResult & { busy: true } = { done: false, processed: 0, remaining: null, busy: true };
       return json(busy);
     }
 
@@ -147,6 +151,19 @@ export async function handleSync(request: Request, deps: HandlerDeps): Promise<R
 function syncErrorResponse(deps: EngineDeps, e: unknown): Response {
   if (e instanceof RevokedError) {
     return errorResponse(403, "strava_revoked", "Strava access was revoked. Please reconnect Strava.");
+  }
+  if (e instanceof ConfigError) {
+    logError(deps, "sync", e);
+    return errorResponse(500, "config_error", "The server could not authenticate with Strava. Please contact support.");
+  }
+  if (e instanceof StravaHttpError && e.status === 429) {
+    const rateLimited: SyncResult = {
+      done: false,
+      processed: 0,
+      remaining: null,
+      rateLimited: { retryAfterSec: e.retryAfterSec ?? 60 },
+    };
+    return json(rateLimited);
   }
   if (e instanceof UpstreamError || e instanceof StravaHttpError) {
     logError(deps, "sync", e);
@@ -208,12 +225,21 @@ interface WebhookEvent {
   object_id?: unknown;
   aspect_type?: unknown;
   owner_id?: unknown;
+  subscription_id?: unknown;
   updates?: Record<string, unknown> | null;
 }
 
-/** Never throws. */
+/**
+ * Strava events are unsigned, so they are only hints:
+ * - when STRAVA_SUBSCRIPTION_ID is configured, events from other subscriptions are dropped;
+ * - destructive events (athlete deauthorization, activity delete) are verified with Strava first.
+ * Never throws.
+ */
 export async function processWebhookEvent(deps: HandlerDeps, ev: WebhookEvent): Promise<void> {
   try {
+    const wanted = deps.config.subscriptionId;
+    if (wanted && String(ev.subscription_id) !== String(wanted)) return;
+
     const owner = Number(ev.owner_id);
     const objectId = Number(ev.object_id);
     if (!Number.isFinite(owner)) return;
@@ -221,7 +247,8 @@ export async function processWebhookEvent(deps: HandlerDeps, ev: WebhookEvent): 
     if (ev.object_type === "athlete") {
       if (ev.aspect_type === "update" && ev.updates && String(ev.updates.authorized) === "false") {
         const conn = await deps.store.getConnectionByAthlete(owner);
-        if (conn) await deps.store.deleteConnection(conn.user_id);
+        if (!conn) return;
+        if (await accessIsRevoked(deps, conn)) await deps.store.deleteConnection(conn.user_id);
       }
       return;
     }
@@ -231,9 +258,11 @@ export async function processWebhookEvent(deps: HandlerDeps, ev: WebhookEvent): 
     if (!conn) return;
 
     if (ev.aspect_type === "delete") {
-      await deps.store.deleteByStravaId(conn.user_id, objectId);
+      // Only delete when Strava itself says the activity is gone (404).
+      if (await activityIsGone(deps, conn, objectId)) await deps.store.deleteByStravaId(conn.user_id, objectId);
     } else if (ev.aspect_type === "create" || ev.aspect_type === "update") {
       try {
+        // For an update where Strava now answers 403/404 the stored row is left alone (see processActivity).
         await syncSingleActivity(deps, conn, objectId);
       } catch (e) {
         if (e instanceof RevokedError) await deps.store.deleteConnection(conn.user_id);
@@ -242,6 +271,29 @@ export async function processWebhookEvent(deps: HandlerDeps, ev: WebhookEvent): 
     }
   } catch (e) {
     logError(deps, "webhook", e);
+  }
+}
+
+/** True only when Strava confirms the grant is revoked (refresh says invalid_grant, or GET /athlete answers 401). */
+async function accessIsRevoked(deps: HandlerDeps, conn: Connection): Promise<boolean> {
+  try {
+    const fresh = await freshConnection(deps, conn);
+    await deps.strava.getAthlete(fresh.access_token);
+    return false;
+  } catch (e) {
+    if (e instanceof RevokedError) return true;
+    return e instanceof StravaHttpError && e.status === 401;
+  }
+}
+
+/** True only when Strava answers 404 for the activity. Any other outcome (including errors) means "keep". */
+async function activityIsGone(deps: HandlerDeps, conn: Connection, stravaId: number): Promise<boolean> {
+  try {
+    const fresh = await freshConnection(deps, conn);
+    await deps.strava.getActivity(fresh.access_token, stravaId);
+    return false;
+  } catch (e) {
+    return e instanceof StravaHttpError && e.status === 404;
   }
 }
 

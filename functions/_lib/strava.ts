@@ -14,6 +14,8 @@ export class StravaHttpError extends Error {
     public status: number,
     /** Only set for 429. */
     public retryAfterSec: number | null = null,
+    /** Token endpoint said the grant (refresh token) is invalid or revoked. */
+    public grantInvalid = false,
   ) {
     super(`Strava request failed (${status})`);
     this.name = "StravaHttpError";
@@ -35,6 +37,8 @@ export interface StravaClient {
     opts: { after: number; page: number; perPage: number },
   ): Promise<Array<{ id: number }>>;
   getActivity(accessToken: string, id: number): Promise<StravaDetailedActivity>;
+  /** Cheap authenticated call (GET /athlete); throws StravaHttpError (401 when access was revoked). */
+  getAthlete(accessToken: string): Promise<void>;
   /** null when the activity has no HR stream. */
   getHrStream(accessToken: string, id: number): Promise<StravaHrStream | null>;
   deauthorize(accessToken: string): Promise<void>;
@@ -51,6 +55,20 @@ export function buildAuthorizeUrl(p: { clientId: string; redirectUri: string; st
   u.searchParams.set("scope", `read,${REQUIRED_SCOPE}`);
   u.searchParams.set("state", p.state);
   return u.toString();
+}
+
+/** True when a token-endpoint error body says the grant is invalid/revoked (not a client id/secret problem). */
+async function isInvalidGrant(res: Response): Promise<boolean> {
+  try {
+    const b = (await res.json()) as { error?: unknown; errors?: Array<{ field?: unknown; resource?: unknown }> };
+    if (b?.error === "invalid_grant") return true;
+    return (
+      Array.isArray(b?.errors) &&
+      b.errors.some((e) => e?.field === "refresh_token" || e?.resource === "RefreshToken")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function pair(v: string | null): [number, number] | null {
@@ -88,7 +106,13 @@ export function createStravaClient(opts: {
         retryAfterSeconds({ retryAfter: h.get("Retry-After"), usage: u ?? usage, limit: l ?? limit }, nowSec()),
       );
     }
-    if (!res.ok) throw new StravaHttpError(res.status);
+    if (!res.ok) {
+      let grantInvalid = false;
+      if (url === TOKEN_URL && (res.status === 400 || res.status === 401)) {
+        grantInvalid = await isInvalidGrant(res);
+      }
+      throw new StravaHttpError(res.status, null, grantInvalid);
+    }
     return res;
   }
 
@@ -117,6 +141,9 @@ export function createStravaClient(opts: {
       const j = (await res.json()) as unknown;
       if (!Array.isArray(j)) throw new StravaHttpError(502);
       return j.filter((x): x is { id: number } => !!x && typeof (x as { id?: unknown }).id === "number");
+    },
+    async getAthlete(token) {
+      await request(`${API}/athlete`, bearer(token));
     },
     async getActivity(token, id) {
       const res = await request(`${API}/activities/${id}?include_all_efforts=false`, bearer(token));

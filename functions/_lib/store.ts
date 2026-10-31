@@ -239,13 +239,26 @@ export function createSupabaseStore(opts: { url: string; serviceRoleKey: string;
       }));
     },
     async upsertStravaActivity(row) {
-      const { data, error } = await db
+      // 1) Insert, ignoring a conflict, so an existing row's id is never rewritten.
+      const ins = await db
         .from("activities")
-        .upsert(row, { onConflict: "strava_id" })
-        .select("id")
-        .single();
-      if (error) fail("upsertStravaActivity", error);
-      return String((data as { id: string }).id);
+        .upsert(row, { onConflict: "strava_id", ignoreDuplicates: true })
+        .select("id");
+      if (ins.error) fail("upsertStravaActivity", ins.error);
+      if (ins.data && ins.data.length > 0) return String((ins.data[0] as { id: string }).id);
+      // 2) Row already existed: update only the Strava-owned columns (the payload never has notes/excluded/...).
+      const patch: Record<string, unknown> = { ...row };
+      delete patch.id;
+      delete patch.user_id;
+      const upd = await db
+        .from("activities")
+        .update(patch)
+        .eq("strava_id", row.strava_id)
+        .eq("user_id", row.user_id)
+        .select("id");
+      if (upd.error) fail("upsertStravaActivity", upd.error);
+      if (!upd.data || upd.data.length === 0) return fail("upsertStravaActivity", null);
+      return String((upd.data[0] as { id: string }).id);
     },
     async findManualActivitiesNear(userId, startIso, windowMin) {
       const t = Date.parse(startIso);

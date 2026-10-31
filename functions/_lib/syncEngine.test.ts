@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { StravaHttpError } from "./strava";
 import {
   BATCH_SIZE,
+  ConfigError,
+  PAGE_RESERVE,
+  PER_ACTIVITY_RESERVE,
   RevokedError,
   UpstreamError,
   ensureFreshToken,
@@ -41,11 +44,47 @@ describe("ensureFreshToken", () => {
     expect(store.tokenUpdates).toEqual([]);
   });
 
-  it("treats a rejected refresh token as revoked", async () => {
+  it("treats an invalid grant as revoked", async () => {
     const { strava, deps, conn } = setup();
     conn.expires_at = NOW_SEC - 10;
-    strava.fail("refresh", new StravaHttpError(400));
+    strava.fail("refresh", new StravaHttpError(400, null, true));
     await expect(ensureFreshToken(deps, conn)).rejects.toBeInstanceOf(RevokedError);
+  });
+
+  it("other 400/401 on refresh are config errors, not revocation", async () => {
+    const { strava, deps, conn } = setup();
+    conn.expires_at = NOW_SEC - 10;
+    strava.fail("refresh", new StravaHttpError(401, null, false));
+    await expect(ensureFreshToken(deps, conn)).rejects.toBeInstanceOf(ConfigError);
+  });
+
+  it("uses tokens another caller already rotated instead of declaring revocation", async () => {
+    const { store, strava, deps, conn } = setup();
+    conn.expires_at = NOW_SEC - 10;
+    strava.fail("refresh", new StravaHttpError(400, null, true));
+    // someone else refreshed meanwhile
+    Object.assign(store.conns.get("u1")!, { refresh_token: "ref-other", access_token: "acc-other", expires_at: NOW_SEC + 9000 });
+    const stale = { ...conn };
+    const res = await ensureFreshToken(deps, stale);
+    expect(res.access_token).toBe("acc-other");
+    expect(store.conns.has("u1")).toBe(true);
+  });
+
+  it("retries persisting rotated tokens twice more, then surfaces the failure", async () => {
+    const { store, deps, conn } = setup();
+    conn.expires_at = NOW_SEC - 10;
+    let n = 0;
+    store.updateTokens = async () => {
+      n++;
+      if (n < 3) throw new Error("db down");
+    };
+    const res = await ensureFreshToken(deps, conn);
+    expect(n).toBe(3);
+    expect(res.refresh_token).toBe("ref-new");
+
+    n = -10;
+    await expect(ensureFreshToken(deps, conn)).rejects.toThrow("db down");
+    expect(n).toBe(-7);
   });
 });
 
@@ -188,6 +227,24 @@ describe("runSyncBatch", () => {
     strava.fail("detail:1", new StravaHttpError(404));
     const res = await runSyncBatch(deps, conn, cursor);
     expect(res.processed).toBe(1);
+  });
+
+  it("uses conservative reserves under the 45 ceiling", () => {
+    expect(PER_ACTIVITY_RESERVE).toBe(12);
+    expect(PAGE_RESERVE).toBe(5);
+  });
+
+  it("does not start an activity or a page fetch without enough budget left", async () => {
+    const a = setup();
+    a.strava.pages = [[1, 2]];
+    a.deps.used = () => 45 - PAGE_RESERVE + 1;
+    expect(await runSyncBatch(a.deps, a.conn, a.cursor)).toEqual({ done: false, processed: 0, remaining: null });
+    expect(a.strava.calls).toEqual([]);
+
+    const b = setup({ mode: "initial", after: 1, page: 2, pending: [1] });
+    b.deps.used = () => 45 - PER_ACTIVITY_RESERVE + 1;
+    expect((await runSyncBatch(b.deps, b.conn, b.cursor)).processed).toBe(0);
+    expect(b.strava.calls).toEqual([]);
   });
 
   it("stops early when the subrequest budget is used up", async () => {
