@@ -13,6 +13,7 @@ import { Spinner } from "@/components/States";
 
 // Recharts is large: load the chart screens on demand so the first screen stays small.
 const ReportsPage = lazy(() => import("@/features/reports").then((m) => ({ default: m.ReportsPage })));
+const ConnectionsPage = lazy(() => import("@/features/connections").then((m) => ({ default: m.ConnectionsPage })));
 const WeightPage = lazy(() => import("@/features/weight").then((m) => ({ default: m.WeightPage })));
 
 export default function App() {
@@ -33,6 +34,7 @@ export default function App() {
                 <Route path="/meals" element={<MealsPage />} />
                 <Route path="/activity" element={<ActivityPage />} />
                 <Route path="/weight" element={<Suspense fallback={<Spinner />}><WeightPage /></Suspense>} />
+                <Route path="/connections" element={<Suspense fallback={<Spinner />}><ConnectionsPage /></Suspense>} />
                 <Route path="/reports" element={<Suspense fallback={<Spinner />}><ReportsPage /></Suspense>} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
