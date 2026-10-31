@@ -33,7 +33,13 @@ export interface EmailStore {
   /** Range is IST dates, inclusive. */
   fetchWeekData(userId: string, range: DateRange): Promise<WeekData>;
   getUserEmail(userId: string): Promise<string | null>;
-  setLastWeeklyEmailAt(userId: string, iso: string): Promise<void>;
+  /**
+   * Atomically set last_weekly_email_at = nowIso when the user is opted in and (cutoffIso is null, or never mailed,
+   * or last mailed before cutoffIso). Returns false when no row matched.
+   */
+  claimWeeklySend(userId: string, opts: { nowIso: string; cutoffIso: string | null }): Promise<boolean>;
+  /** Restore previousIso, but only while the column still equals claimedIso (never clobbers a newer value). */
+  rollbackWeeklySend(userId: string, opts: { claimedIso: string; previousIso: string | null }): Promise<void>;
   setEmailWeekly(userId: string, value: boolean): Promise<void>;
 }
 
@@ -102,9 +108,17 @@ export function createEmailStore(opts: { url: string; serviceRoleKey: string }):
       if (error) return null;
       return data.user?.email || null;
     },
-    async setLastWeeklyEmailAt(userId, iso) {
-      const { error } = await db.from("profiles").update({ last_weekly_email_at: iso }).eq("user_id", userId);
-      if (error) fail("mark sent");
+    async claimWeeklySend(userId, { nowIso, cutoffIso }) {
+      let q = db.from("profiles").update({ last_weekly_email_at: nowIso }).eq("user_id", userId).eq("email_weekly", true);
+      if (cutoffIso) q = q.or(`last_weekly_email_at.is.null,last_weekly_email_at.lt.${cutoffIso}`);
+      const { data, error } = await q.select("user_id");
+      if (error) return fail("claim send");
+      return (data ?? []).length > 0;
+    },
+    async rollbackWeeklySend(userId, { claimedIso, previousIso }) {
+      const { error } = await db.from("profiles").update({ last_weekly_email_at: previousIso })
+        .eq("user_id", userId).eq("last_weekly_email_at", claimedIso);
+      if (error) fail("rollback send");
     },
     async setEmailWeekly(userId, value) {
       const { error } = await db.from("profiles").update({ email_weekly: value }).eq("user_id", userId);

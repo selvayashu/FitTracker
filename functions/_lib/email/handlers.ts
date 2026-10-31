@@ -89,7 +89,7 @@ export async function handleWeekly(request: Request, deps: EmailDeps): Promise<R
     const range = { from: addDays(today, -7), to: addDays(today, -1) };
     const data = await deps.store.fetchWeekData(userId, range);
     const summary = summarizeRange({ range, today, profile: reportProfile, ...data });
-    if (summary.loggedDays === 0) return notSent("no_data");
+    if (summary.loggedDays === 0 && summary.activity.workouts === 0) return notSent("no_data");
 
     const email = await deps.store.getUserEmail(userId);
     if (!email) return notSent("no_email");
@@ -104,6 +104,15 @@ export async function handleWeekly(request: Request, deps: EmailDeps): Promise<R
       unsubscribeUrl,
     });
 
+    // Claim atomically BEFORE sending so concurrent calls cannot both send.
+    const previousIso = profile.last_weekly_email_at;
+    const claimed = await deps.store.claimWeeklySend(userId, {
+      nowIso,
+      cutoffIso: force ? null : new Date(now - RECENT_DAYS * 86_400_000).toISOString(),
+    });
+    if (!claimed) return notSent("recently_sent");
+
+    let sandboxRefused = false;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), SEND_TIMEOUT_MS);
     let ok = false;
@@ -125,18 +134,29 @@ export async function handleWeekly(request: Request, deps: EmailDeps): Promise<R
         }),
       });
       ok = res.ok;
-      if (!ok) deps.log(`resend rejected the message (status ${res.status})`);
+      if (!ok) {
+        if (res.status === 403 && !emailFrom) {
+          sandboxRefused = true;
+          deps.log("email: Resend refused the sandbox sender (set EMAIL_FROM to an address on a verified domain)");
+        } else {
+          deps.log(`resend rejected the message (status ${res.status})`);
+        }
+      }
     } catch {
       deps.log("resend request failed");
     } finally {
       clearTimeout(timer);
     }
-    if (!ok) return notSent("send_failed", 502);
-
-    try {
-      await deps.store.setLastWeeklyEmailAt(userId, nowIso);
-    } catch {
-      deps.log("warning: sent but could not update last_weekly_email_at");
+    if (!ok) {
+      try {
+        await deps.store.rollbackWeeklySend(userId, { claimedIso: nowIso, previousIso });
+      } catch {
+        deps.log("warning: could not roll back last_weekly_email_at");
+      }
+      return json(
+        sandboxRefused ? { sent: false, reason: "send_failed", hint: "sandbox_sender" } : { sent: false, reason: "send_failed" },
+        502,
+      );
     }
     return json({ sent: true });
   } catch {
