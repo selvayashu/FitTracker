@@ -31,6 +31,22 @@ await db.exec(`
   grant execute on function auth.uid() to anon, authenticated;
 `);
 
+// pg_net stub (pg_cron is unavailable in PGlite; 0008 must still apply)
+await db.exec(`
+  create schema net;
+  create table net.test_http_calls (id serial primary key, url text, headers jsonb, body jsonb);
+  create table net.test_http_fail (user_id uuid);
+  create function net.http_post(url text, body jsonb default '{}', params jsonb default '{}', headers jsonb default '{}', timeout_milliseconds int default 5000)
+    returns bigint language plpgsql as $$
+  begin
+    if exists (select 1 from net.test_http_fail where user_id::text = body->>'user_id') then
+      raise exception 'stub failure';
+    end if;
+    insert into net.test_http_calls (url, headers, body) values (url, headers, body);
+    return 1;
+  end $$;
+`);
+
 for (const f of fs.readdirSync(migDir).filter((f) => f.endsWith(".sql")).sort()) {
   await db.exec(fs.readFileSync(path.join(migDir, f), "utf8"));
   console.log("applied " + f);
@@ -317,6 +333,81 @@ const off = (await db.query(`select name, kcal_per_100g k, protein_per_100g p, c
 ok("all foods kcal within 15% of Atwater (fibre at 2 kcal/g)", off.length === 0, JSON.stringify(off.slice(0, 5)));
 ok("trigram search works", (await db.query(`select 1 from foods where lower(name) like '%dosa%'`)).rows.length >= 4);
 ok("RLS forced on all tables", (await db.query(`select count(*)::int c from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and not (c.relrowsecurity and c.relforcerowsecurity)`)).rows[0].c === 0);
+
+// ---- Phase 4: weekly email (0008)
+console.log("weekly email (0008)");
+ok("pg_cron/pg_net unavailable in PGlite (guard path exercised)", (await db.query(`select 1 from pg_available_extensions where name in ('pg_cron','pg_net')`)).rows.length === 0);
+await db.exec(fs.readFileSync(path.join(migDir, "0008_email.sql"), "utf8"));
+ok("0008 re-applied cleanly", true);
+const C = "cccccccc-cccc-cccc-cccc-cccccccccccc", D = "dddddddd-dddd-dddd-dddd-dddddddddddd",
+  E = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", F = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+const asAnon = async (sql) => {
+  await db.exec(`set role anon`);
+  try { const r = await db.query(sql); return { rows: r.rows, err: null }; }
+  catch (e) { return { rows: [], err: e.message }; }
+  finally { await db.exec(`reset role`); }
+};
+// (h) defaults via signup trigger
+await db.exec(`insert into auth.users (id) values ('${C}'), ('${D}'), ('${E}'), ('${F}')`);
+const dp = (await db.query(`select email_weekly, last_weekly_email_at from profiles where user_id='${C}'`)).rows[0];
+ok("new profile: email_weekly false, last_weekly_email_at null", dp.email_weekly === false && dp.last_weekly_email_at === null);
+// (b) own vs other
+await as(A, () => db.query(`update profiles set email_weekly = true where user_id='${A}'`));
+ok("user can set own email_weekly", (await rowsAs(A, `select email_weekly from profiles`))[0].email_weekly === true);
+const xu = await as(A, () => db.query(`update profiles set email_weekly = true where user_id='${B}' returning 1`));
+ok("user cannot update another user's email_weekly", xu.rows.length === 0);
+ok("other user's email_weekly unchanged", (await db.query(`select email_weekly from profiles where user_id='${B}'`)).rows[0].email_weekly === false);
+ok("user cannot read another user's profile", (await rowsAs(A, `select * from profiles where user_id='${B}'`)).length === 0);
+const au = await asAnon(`update profiles set email_weekly = true returning 1`);
+ok("anon cannot update profiles", au.rows.length === 0, String(au.err));
+ok("anon update changed nothing", (await db.query(`select count(*)::int c from profiles where email_weekly and user_id<>'${A}'`)).rows[0].c === 0);
+await db.exec(`update profiles set email_weekly=false where user_id='${A}'`);
+// (c) app_config
+for (const q of [`select * from app_config`, `insert into app_config (key,value) values ('x','y')`, `update app_config set value='z'`, `delete from app_config`]) {
+  ok(`authenticated: ${q.split(" ")[0]} app_config denied`, /permission denied/i.test(await fails(A, q) ?? ""));
+  const r = await asAnon(q);
+  ok(`anon: ${q.split(" ")[0]} app_config denied`, /permission denied/i.test(r.err ?? ""), String(r.err));
+}
+ok("app_config RLS enabled and forced", (await db.query(`select relrowsecurity r, relforcerowsecurity f from pg_class where oid='public.app_config'::regclass`)).rows[0].f === true);
+ok("app_config has no policies", (await db.query(`select count(*)::int c from pg_policies where tablename='app_config'`)).rows[0].c === 0);
+// (d) missing config
+await db.exec(`delete from app_config; update profiles set email_weekly=true, onboarded=true`);
+ok("no config: returns 0", (await db.query(`select public.send_weekly_summaries() n`)).rows[0].n === 0);
+await db.exec(`insert into app_config values ('email_endpoint_url','https://x.test/api/email/weekly')`);
+ok("only url: returns 0", (await db.query(`select public.send_weekly_summaries() n`)).rows[0].n === 0);
+await db.exec(`update app_config set value='' where key='email_endpoint_url'; insert into app_config values ('cron_secret','s3cret')`);
+ok("empty url: returns 0", (await db.query(`select public.send_weekly_summaries() n`)).rows[0].n === 0);
+ok("nothing queued without config", (await db.query(`select count(*)::int c from net.test_http_calls`)).rows[0].c === 0);
+// (e) eligibility
+await db.exec(`
+  update app_config set value='https://x.test/api/email/weekly' where key='email_endpoint_url';
+  update profiles set email_weekly=false, onboarded=false, last_weekly_email_at=null;
+  update profiles set email_weekly=true, onboarded=true where user_id='${A}';
+  update profiles set email_weekly=true, onboarded=true, last_weekly_email_at=now()-interval '7 days' where user_id='${B}';
+  update profiles set email_weekly=false, onboarded=true where user_id='${C}';
+  update profiles set email_weekly=true, onboarded=false where user_id='${D}';
+  update profiles set email_weekly=true, onboarded=true, last_weekly_email_at=now()-interval '5 days' where user_id='${E}';
+`);
+ok("returns 2 for the eligible users", (await db.query(`select public.send_weekly_summaries() n`)).rows[0].n === 2);
+const calls = (await db.query(`select * from net.test_http_calls`)).rows;
+ok("exactly 2 calls", calls.length === 2);
+ok("calls target A and B only", JSON.stringify(calls.map((c) => c.body.user_id).sort()) === JSON.stringify([A, B]));
+ok("calls carry url, secret header, content-type, {user_id} body", calls.every((c) => c.url === "https://x.test/api/email/weekly"
+  && c.headers["x-cron-secret"] === "s3cret" && c.headers["Content-Type"] === "application/json"
+  && Object.keys(c.body).join() === "user_id"));
+// (f) failure isolation
+await db.exec(`delete from net.test_http_calls; insert into net.test_http_fail values ('${A}')`);
+ok("one failing user: returns count of successes (1)", (await db.query(`select public.send_weekly_summaries() n`)).rows[0].n === 1);
+const calls2 = (await db.query(`select body->>'user_id' u from net.test_http_calls`)).rows;
+ok("others still queued", calls2.length === 1 && calls2[0].u === B);
+await db.exec(`delete from net.test_http_fail; delete from net.test_http_calls`);
+// (g) execute privileges
+const exErr = await fails(A, `select public.send_weekly_summaries()`);
+ok("authenticated cannot execute send_weekly_summaries", /permission denied/i.test(exErr ?? ""), String(exErr));
+const ea = await asAnon(`select public.send_weekly_summaries()`);
+ok("anon cannot execute send_weekly_summaries", /permission denied/i.test(ea.err ?? ""), String(ea.err));
+ok("secret not leaked in error text", !/s3cret/.test((exErr ?? "") + (ea.err ?? "")));
+await db.exec(`delete from app_config`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
