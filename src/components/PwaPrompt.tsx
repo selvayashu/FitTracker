@@ -11,7 +11,8 @@ export function PwaPrompt() {
   } = useRegisterSW({
     onRegisteredSW(_url, registration) {
       // Check for a new version hourly while the app stays open.
-      if (registration) setInterval(() => { void registration.update(); }, HOUR);
+      // Skip while offline, and never let a failed check surface as an unhandled rejection.
+      if (registration) setInterval(() => { if (navigator.onLine) registration.update().catch(() => {}); }, HOUR);
     },
   });
 

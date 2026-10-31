@@ -5,8 +5,9 @@
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
   # REPORT-ONLY for now: violations show in the browser console but nothing is blocked.
-  # After testing every screen with no violations, rename this header to Content-Security-Policy.
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://images.openfoodfacts.org; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://world.openfoodfacts.org; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+  # After testing every screen with no violations, rename this header to Content-Security-Policy and ADD
+  # frame-ancestors 'none' to it (browsers ignore that directive, with a warning, in report-only mode).
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://images.openfoodfacts.org; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://world.openfoodfacts.org; manifest-src 'self'; worker-src 'self'; base-uri 'self'; form-action 'self'
 
 # The service worker and the HTML shell must always be revalidated so updates are noticed.
 /sw.js
