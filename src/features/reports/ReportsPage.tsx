@@ -16,6 +16,8 @@ import {
 } from "./charts";
 import { PRESET_LABEL, createRequestGuard, fmtHours, fmtInt, fmtKg, fmtSigned, plural, rangeLabel, safe, weightChangeText } from "./logic";
 
+import { ExportMenu } from "./export/ExportMenu";
+
 const PRESETS: RangePreset[] = ["day", "week", "month", "custom"];
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -213,6 +215,8 @@ export function ReportsPage() {
           </div>
         )}
       </section>
+
+      <ExportMenu range={range} summary={summary} inputs={inputs} loading={loading} empty={empty} userName={profile?.name ?? null} />
 
       {error && <ErrorState message={error} onRetry={() => setTick((t) => t + 1)} />}
       {!summary && loading && <Spinner label="Loading report" />}

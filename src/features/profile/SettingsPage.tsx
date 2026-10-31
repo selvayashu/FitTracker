@@ -13,6 +13,7 @@ import { formFromProfile, parseProfileForm, type FormErrors, type ProfileFormSta
 import { ProfileFields, ProfilePreview } from "./ProfileFields";
 import { buildProfileUpdate } from "./saveProfile";
 import { persistProfile, upsertWeightLog } from "./persist";
+import { InstallCard, WeeklyEmailCard } from "./SettingsCards";
 import { Banner, primaryBtn, secondaryBtn } from "./ui";
 
 export function SettingsPage() {
@@ -145,6 +146,9 @@ export function SettingsPage() {
           {returnBanner && <div className="mt-3"><Banner kind={returnBanner.kind}>{returnBanner.text}</Banner></div>}
         </section>
       )}
+
+      <WeeklyEmailCard />
+      <InstallCard />
 
       <section className="border-t border-slate-200 pt-4 dark:border-slate-700">
         {user?.email && <p className="mb-2 text-sm text-slate-500 dark:text-slate-400">Signed in as {user.email}</p>}

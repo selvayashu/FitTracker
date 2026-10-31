@@ -32,13 +32,13 @@ function useReducedMotion(): boolean {
 interface Table { headers: string[]; rows: Array<Array<string | number>> }
 
 /** Card with a heading, a visible one-line text summary, the chart, and an expandable data table with the same numbers. */
-function ChartCard({ title, summary, table, note, children }: { title: string; summary: string; table: Table; note?: string; children: ReactNode }) {
+function ChartCard({ chartId, title, summary, table, note, children }: { chartId?: string; title: string; summary: string; table: Table; note?: string; children: ReactNode }) {
   return (
     <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800" aria-label={title}>
       <h2 className="font-semibold">{title}</h2>
       <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-300">{summary}</p>
       {note && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{note}</p>}
-      <div className="mt-2 w-full min-w-0 text-slate-500 dark:text-slate-400" style={{ height: H }} role="img" aria-label={`${title}. ${summary}`}>
+      <div data-chart-id={chartId} className="mt-2 w-full min-w-0 text-slate-500 dark:text-slate-400" style={{ height: H }} role="img" aria-label={`${title}. ${summary}`}>
         {children}
       </div>
       <details className="mt-2 text-sm">
@@ -75,6 +75,7 @@ export function CaloriesChart({ s }: { s: RangeSummary }) {
   const interval = tickInterval(data.length);
   return (
     <ChartCard
+      chartId="inOut"
       title="Calories in vs out"
       summary={calorieSummaryText(s)}
       note="Calories out are estimated (BMR plus active calories). Hatched bars mark days with no meals logged."
@@ -110,6 +111,7 @@ export function NetChart({ s }: { s: RangeSummary }) {
   const data = calorieChartData(s.days);
   return (
     <ChartCard
+      chartId="net"
       title="Net balance"
       summary={netSummaryText(s)}
       note="Net = calories in minus calories out (estimated). Gaps are days with no meals logged."
@@ -134,6 +136,7 @@ export function SlotChart({ s }: { s: RangeSummary }) {
   const data = s.slots.map((x) => ({ name: SLOT_LABEL[x.slot], avgKcal: Math.round(safe(x.avgKcal)), pct: Math.round(safe(x.pct)) }));
   return (
     <ChartCard
+      chartId="slots"
       title="Calories per meal"
       summary={slotSummaryText(s)}
       table={{ headers: ["Meal", "Average kcal", "% of intake"], rows: data.map((d) => [d.name, d.avgKcal, `${d.pct}%`]) }}
@@ -156,6 +159,7 @@ export function MacroChart({ s }: { s: RangeSummary }) {
   const data = macroData(s);
   return (
     <ChartCard
+      chartId="macros"
       title="Macros vs targets"
       summary={macroSummaryText(s)}
       table={{ headers: ["Macro", "Average (g)", "Target (g)", "% of target"], rows: data.map((d) => [d.name, d.avg, d.target, `${d.pct}%`]) }}
@@ -220,6 +224,7 @@ export function WeightChart({ s }: { s: RangeSummary }) {
   const data = weightData(s);
   return (
     <ChartCard
+      chartId="weight"
       title="Weight and BMI"
       summary={weightSummaryText(s)}
       table={{ headers: ["Date", "Weight (kg)", "BMI"], rows: data.map((d) => [d.date, d.weightKg, d.bmi]) }}
@@ -303,6 +308,7 @@ export function HrChart({ s }: { s: RangeSummary }) {
   const data = hrData(s);
   return (
     <ChartCard
+      chartId="hr"
       title="Heart rate"
       summary={hrSummaryText(s)}
       table={{ headers: ["Date", "Average (bpm)", "Max (bpm)"], rows: data.map((d) => [d.date, d.avgHr ?? "none", d.maxHr ?? "none"]) }}
