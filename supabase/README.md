@@ -39,3 +39,14 @@ npm test
 
 They stub `auth.users` / `auth.uid()` / roles, apply all migrations (twice, to check idempotency) and assert RLS isolation,
 CHECK constraints, the signup trigger, daily summary triggers and seed counts.
+
+## Phase 2 (Strava)
+
+`0006_strava.sql` adds:
+
+- `activities`: `name`, `elevation_m`, `suffer_score`, `moving_time_s`, `elapsed_time_s`, `excluded`, `duplicate_dismissed` (non-negative CHECKs); `duplicate_of` is a real FK (`on delete set null`) with an index.
+- `strava_connections`: OAuth tokens. RLS is enabled and forced with no policies and no grants for `anon`/`authenticated`, so tokens are reachable only with the service-role key (Worker side). Clients get connection state from the `strava_status()` RPC, which never returns tokens.
+- `activity_hr_zones`: per-activity time in HR zones, owner-only RLS (a zone row must point at the user's own activity).
+- `recompute_daily_summary` now ignores `excluded = true` activities.
+
+One-time note: `SUPABASE_SERVICE_ROLE_KEY` goes ONLY into Cloudflare secrets (and the git-ignored `.dev.vars` for local Worker dev). Never put it in `.env.local`, any `VITE_*` variable or the browser.
