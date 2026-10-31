@@ -1,8 +1,10 @@
 /** Wires real implementations for one request. */
+import { requireConfig } from "../http";
 import type { EmailDeps } from "./handlers";
 import { createEmailStore } from "./store";
 
 export function buildEmailDeps(env: Env): EmailDeps {
+  requireConfig(env, ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]);
   return {
     store: createEmailStore({ url: env.SUPABASE_URL, serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY }),
     fetch: (input, init) => fetch(input, init),

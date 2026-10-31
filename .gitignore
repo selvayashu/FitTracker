@@ -50,3 +50,6 @@ coverage/
 # Cloudflare local dev (secrets live here, never commit)
 .dev.vars
 .wrangler/
+
+# Generated bundle of all migrations (paste into the Supabase SQL Editor)
+supabase/all-migrations.sql

@@ -35,3 +35,38 @@ export function bearerToken(request: Request): string | null {
   const m = /^Bearer\s+(\S+)$/i.exec(h.trim());
   return m ? m[1] : null;
 }
+
+/** Thrown when required Worker settings are missing. Carries setting NAMES only, never values. */
+export class ConfigError extends Error {
+  constructor(public missing: string[]) {
+    super("missing configuration");
+    this.name = "ConfigError";
+  }
+}
+
+/** Throw a ConfigError listing every required setting that is unset or empty. */
+export function requireConfig(env: Env, names: Array<keyof Env>): void {
+  const missing = names.filter((n) => {
+    const v = env[n];
+    return typeof v !== "string" || v.trim() === "";
+  });
+  if (missing.length) throw new ConfigError(missing.map(String));
+}
+
+/**
+ * Error boundary for a route handler. A missing setting becomes a clear JSON 500 that names the setting;
+ * anything unexpected becomes a generic JSON 500. Never exposes error messages, stacks or values.
+ */
+export function guarded(fn: PagesFunction<Env>): PagesFunction<Env> {
+  return async (ctx) => {
+    try {
+      return await fn(ctx);
+    } catch (e) {
+      if (e instanceof ConfigError) {
+        return errorResponse(500, "not_configured", `Server configuration is incomplete. Missing: ${e.missing.join(", ")}.`);
+      }
+      console.error(`unhandled error: ${e instanceof Error ? e.name : "unknown"}`);
+      return errorResponse(500, "internal_error", "Something went wrong on the server.");
+    }
+  };
+}

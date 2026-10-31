@@ -1,10 +1,15 @@
 /** Wires real implementations (Supabase service role, Strava over fetch) for one request. */
 import { createTokenVerifier } from "./auth";
+import { requireConfig } from "./http";
 import type { HandlerDeps } from "./handlers";
 import { createStravaClient } from "./strava";
 import { createSupabaseStore } from "./store";
 
 export function buildDeps(env: Env): HandlerDeps {
+  requireConfig(env, [
+    "SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY",
+    "STRAVA_CLIENT_ID", "STRAVA_CLIENT_SECRET", "STRAVA_STATE_SECRET", "STRAVA_WEBHOOK_VERIFY_TOKEN",
+  ]);
   let count = 0;
   // Every outbound subrequest (Strava and Supabase) goes through this counter.
   const countingFetch: typeof fetch = (input, init) => {
