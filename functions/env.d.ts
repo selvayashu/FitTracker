@@ -8,4 +8,6 @@ interface Env {
   STRAVA_WEBHOOK_VERIFY_TOKEN: string;
   /** HMAC key for the OAuth state parameter. */
   STRAVA_STATE_SECRET: string;
+  /** Optional. The id returned when the webhook subscription was created; when set, webhook events from any other subscription are ignored. */
+  STRAVA_SUBSCRIPTION_ID?: string;
 }

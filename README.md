@@ -101,7 +101,7 @@ Redeploy after saving the secrets.
 curl -X POST https://www.strava.com/api/v3/push_subscriptions   -F client_id=YOUR_CLIENT_ID -F client_secret=YOUR_CLIENT_SECRET   -F callback_url=https://YOUR-SITE.pages.dev/api/strava/webhook   -F verify_token=YOUR_STRAVA_WEBHOOK_VERIFY_TOKEN
 ```
 
-A response like `{"id": 123456}` means it worked. Only one subscription is allowed per app. To inspect or remove it: `GET` the same URL with `client_id` and `client_secret` query parameters, or `DELETE https://www.strava.com/api/v3/push_subscriptions/<id>` with the same two fields.
+A response like `{"id": 123456}` means it worked. Add that number as the Cloudflare secret `STRAVA_SUBSCRIPTION_ID` (and redeploy) so the webhook ignores events that do not come from your subscription. Only one subscription is allowed per app. To inspect or remove it: `GET` the same URL with `client_id` and `client_secret` query parameters, or `DELETE https://www.strava.com/api/v3/push_subscriptions/<id>` with the same two fields.
 
 **e. Local testing of the Worker code** (optional): copy `.dev.vars.example` to `.dev.vars`, fill it in, then `npm run build && npx wrangler pages dev dist`. The Strava callback domain must then be `localhost`.
 
