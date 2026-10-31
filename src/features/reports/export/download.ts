@@ -6,6 +6,8 @@ export function makeBlob(content: BlobPart, mime: string): Blob {
 
 export const CSV_MIME = "text/csv;charset=utf-8";
 export const PDF_MIME = "application/pdf";
+/** Slow mobile save dialogs may read the blob long after the click. */
+export const REVOKE_DELAY_MS = 60_000;
 
 /** Strip path separators and control characters so the browser never sees a hostile file name. */
 export function safeFileName(name: string): string {
@@ -44,6 +46,6 @@ export function downloadBlob(content: BlobPart, filename: string, mime: string, 
   env.append(a);
   a.click();
   a.remove();
-  env.setTimeout(() => env.revokeObjectURL(url), 4000);
+  env.setTimeout(() => env.revokeObjectURL(url), REVOKE_DELAY_MS);
   return name;
 }

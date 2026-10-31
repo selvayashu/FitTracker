@@ -21,12 +21,13 @@ describe("download helper", () => {
     const anchor = { href: "", download: "", rel: "", style: { display: "" }, click, remove };
     const revoke = vi.fn();
     const later: Array<() => void> = [];
+    const delays: number[] = [];
     const env: DownloadEnv = {
       createObjectURL: vi.fn(() => "blob:x"),
       revokeObjectURL: revoke,
       createAnchor: () => anchor,
       append: vi.fn(),
-      setTimeout: (fn) => { later.push(fn); return 1; },
+      setTimeout: (fn, ms) => { later.push(fn); delays.push(ms); return 1; },
     };
     const name = downloadBlob("x", "f.pdf", PDF_MIME, env);
     expect(name).toBe("f.pdf");
@@ -35,6 +36,7 @@ describe("download helper", () => {
     expect(click).toHaveBeenCalledOnce();
     expect(remove).toHaveBeenCalledOnce();
     expect(revoke).not.toHaveBeenCalled();
+    expect(delays[0]).toBeGreaterThanOrEqual(60_000);
     later[0]!();
     expect(revoke).toHaveBeenCalledWith("blob:x");
   });

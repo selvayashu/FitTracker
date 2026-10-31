@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { installResultText, installView, lastSentText, weeklyToggleError } from "./settingsCardsLogic";
+import { installCardVisible, installResultText, installView, lastSentText, nextOptimistic, weeklyToggleError } from "./settingsCardsLogic";
 
 describe("lastSentText", () => {
   it("formats in IST", () => {
@@ -20,8 +20,24 @@ describe("installView", () => {
   });
   it("describes outcomes", () => {
     expect(installResultText("accepted")).toMatch(/Installing/);
-    expect(installResultText("dismissed")).toMatch(/cancelled/);
+    expect(installResultText("dismissed", true)).toBe("Install cancelled. It will be offered again later.");
+    expect(installResultText("dismissed", false)).toBe("Install cancelled.");
+    expect(installResultText("dismissed")).not.toMatch(/again/);
+    expect(installCardVisible("none", "dismissed")).toBe(true);
+    expect(installCardVisible("none", null)).toBe(false);
+    expect(installCardVisible("installed", null)).toBe(true);
     expect(installResultText("unavailable")).toMatch(/not available/);
+  });
+});
+
+describe("nextOptimistic", () => {
+  it("keeps the new value while saving or while the stored value is stale", () => {
+    expect(nextOptimistic(true, false, true)).toBe(true);
+    expect(nextOptimistic(true, false, false)).toBe(true); // refresh failed: do not snap back
+  });
+  it("drops it once the stored value agrees, and when there is none", () => {
+    expect(nextOptimistic(true, true, false)).toBeNull();
+    expect(nextOptimistic(null, true, false)).toBeNull();
   });
 });
 

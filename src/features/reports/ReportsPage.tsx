@@ -124,6 +124,7 @@ export function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [exporting, setExporting] = useState(false);
   const guard = useRef(createRequestGuard());
 
   const customError = preset === "custom" ? validateCustomRange(customFrom, customTo, today) : null;
@@ -193,30 +194,30 @@ export function ReportsPage() {
       <section className={`${cardCls} space-y-3`} aria-label="Range">
         <div role="group" aria-label="Range type" className="grid grid-cols-4 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-900">
           {PRESETS.map((p) => (
-            <button key={p} type="button" aria-pressed={preset === p} onClick={() => choosePreset(p)}
+            <button key={p} type="button" disabled={exporting} aria-pressed={preset === p} onClick={() => choosePreset(p)}
               className={`rounded-md px-2 py-1.5 text-sm font-medium ${preset === p ? "bg-teal-600 text-white" : "text-slate-700 hover:bg-slate-200 dark:text-slate-200 dark:hover:bg-slate-800"}`}>
               {PRESET_LABEL[p]}
             </button>
           ))}
         </div>
         <div className="flex items-center justify-between gap-2">
-          <button type="button" className={navBtn} onClick={() => shift(-1)} aria-label="Previous range">&lsaquo;</button>
+          <button type="button" className={navBtn} onClick={() => shift(-1)} disabled={exporting} aria-label="Previous range">&lsaquo;</button>
           <p className="min-w-0 text-center text-sm font-medium" aria-live="polite">{rangeLabel(range)} <span className="text-xs font-normal text-slate-500 dark:text-slate-400">(IST)</span></p>
-          <button type="button" className={navBtn} onClick={() => shift(1)} disabled={atToday} aria-label="Next range">&rsaquo;</button>
+          <button type="button" className={navBtn} onClick={() => shift(1)} disabled={atToday || exporting} aria-label="Next range">&rsaquo;</button>
         </div>
         {preset === "custom" && (
           <div className="grid grid-cols-2 gap-3">
             <Field id="r-from" label="From" error={customError ?? undefined}>
-              <input id="r-from" type="date" className={inputCls} value={customFrom} max={today} onChange={(e) => onCustom(e.target.value, customTo)} aria-invalid={customError != null} />
+              <input id="r-from" type="date" className={inputCls} value={customFrom} max={today} disabled={exporting} onChange={(e) => onCustom(e.target.value, customTo)} aria-invalid={customError != null} />
             </Field>
             <Field id="r-to" label="To">
-              <input id="r-to" type="date" className={inputCls} value={customTo} max={today} onChange={(e) => onCustom(customFrom, e.target.value)} aria-invalid={customError != null} />
+              <input id="r-to" type="date" className={inputCls} value={customTo} max={today} disabled={exporting} onChange={(e) => onCustom(customFrom, e.target.value)} aria-invalid={customError != null} />
             </Field>
           </div>
         )}
       </section>
 
-      <ExportMenu range={range} summary={summary} inputs={inputs} loading={loading} empty={empty} userName={profile?.name ?? null} />
+      <ExportMenu range={range} summary={summary} inputs={inputs} loading={loading} empty={empty} userName={profile?.name ?? null} onBusyChange={setExporting} />
 
       {error && <ErrorState message={error} onRetry={() => setTick((t) => t + 1)} />}
       {!summary && loading && <Spinner label="Loading report" />}

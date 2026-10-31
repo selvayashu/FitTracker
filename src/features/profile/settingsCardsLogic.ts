@@ -27,10 +27,27 @@ export function installView(s: { canInstall: boolean; installed: boolean; showIo
   return "none";
 }
 
-export function installResultText(outcome: "accepted" | "dismissed" | "unavailable"): string {
+export type InstallOutcome = "accepted" | "dismissed" | "unavailable";
+
+/** Never promises another try unless the browser is offering the install prompt again (`canInstall`). */
+export function installResultText(outcome: InstallOutcome, canInstall = false): string {
   if (outcome === "accepted") return "Installing FitTrack. You will find it on your home screen or app list.";
-  if (outcome === "dismissed") return "Install cancelled. You can try again any time.";
+  if (outcome === "dismissed") return canInstall ? "Install cancelled. It will be offered again later." : "Install cancelled.";
   return "Install is not available right now. Use your browser menu to add FitTrack to your home screen.";
+}
+
+/** Keep rendering the install card while a result message is pending, even after canInstall flipped off. */
+export function installCardVisible(view: InstallView, outcome: InstallOutcome | null): boolean {
+  return view !== "none" || outcome !== null;
+}
+
+/**
+ * The optimistic switch value to keep showing: it is dropped once the stored value agrees with it,
+ * or on failure (rollback). While saving, or while the stored value is still stale, it is kept.
+ */
+export function nextOptimistic(optimistic: boolean | null, stored: boolean, saving: boolean): boolean | null {
+  if (optimistic === null || saving) return optimistic;
+  return stored === optimistic ? null : optimistic;
 }
 
 export const IOS_HINT = "Tap Share, then Add to Home Screen";

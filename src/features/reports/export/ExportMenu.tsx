@@ -1,28 +1,37 @@
 import { useEffect, useRef, useState } from "react";
 import {
   buildDailyCsv, buildEntriesCsv, buildInsights, buildPdfModel, exportFileName, formatIstDateTime, formatRangeLabel,
-  type DateRange, type ExportMeta, type ReportInputs, type RangeSummary,
+  type DateRange, type ExportMeta, type PdfChartId, type ReportInputs, type RangeSummary,
 } from "@fittrack/shared";
 import { Banner, cardCls } from "../../profile/ui";
 import { CSV_MIME, PDF_MIME, downloadBlob } from "./download";
-import { KIND_LABEL, errorMessage, exportAvailability, successMessage, type ExportKind } from "./exportLogic";
-import { rasterizeChart } from "./chartRaster";
+import { KIND_LABEL, errorMessage, exportAvailability, sameRange, successMessage, type ExportKind } from "./exportLogic";
+import { rasterizeSnapshot, snapshotChart, type ChartSnapshot } from "./chartRaster";
 
 interface Props {
+  /** The range currently selected on screen. */
   range: DateRange;
   summary: RangeSummary | null;
   inputs: ReportInputs | null;
   loading: boolean;
   empty: boolean;
   userName: string | null;
+  onBusyChange?: (busy: boolean) => void;
 }
 
-export function ExportMenu({ range, summary, inputs, loading, empty, userName }: Props) {
+const nextFrame = () => new Promise<void>((r) => {
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => setTimeout(r, 0));
+  else setTimeout(r, 0);
+});
+
+export function ExportMenu({ range, summary, inputs, loading, empty, userName, onBusyChange }: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<ExportKind | null>(null);
   const [msg, setMsg] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const avail = exportAvailability({ loaded: summary != null && inputs != null, loading, empty, busy: busy != null });
+  const avail = exportAvailability({
+    loaded: summary != null && inputs != null, loading, empty, busy: busy != null, rangeMatches: sameRange(inputs?.range, range),
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -34,27 +43,39 @@ export function ExportMenu({ range, summary, inputs, loading, empty, userName }:
   }, [open]);
 
   const run = async (kind: ExportKind) => {
-    if (!summary || !inputs) return;
+    if (!summary || !inputs || !avail.enabled) return;
+    // Capture everything from the SAME data the summary was built from, before anything yields.
+    const exportRange = inputs.range;
+    const meta: ExportMeta = { rangeLabel: formatRangeLabel(exportRange), generatedAtIst: formatIstDateTime(new Date()), userName };
+    const model = kind === "pdf" ? buildPdfModel(summary, buildInsights(summary), meta) : null;
+    const snaps = new Map<PdfChartId, ChartSnapshot | null>();
+    if (model) for (const b of model.blocks) if (b.type === "chart") snaps.set(b.id, snapshotChart(b.id));
+
     setOpen(false);
     setBusy(kind);
+    onBusyChange?.(true);
     setMsg(null);
     try {
-      const meta: ExportMeta = { rangeLabel: formatRangeLabel(range), generatedAtIst: formatIstDateTime(new Date()), userName };
+      await nextFrame(); // let "Preparing..." paint before the heavy synchronous work
       let saved: string;
+      let lossy = false;
       if (kind === "daily" || kind === "entries") {
         const file = kind === "daily" ? buildDailyCsv(summary, meta) : buildEntriesCsv(inputs, meta);
         saved = downloadBlob(file.content, file.filename, CSV_MIME);
-      } else {
-        const model = buildPdfModel(summary, buildInsights(summary), meta);
+      } else if (model) {
         const { renderPdf } = await import("./renderPdf");
-        const out = await renderPdf(model, (id) => rasterizeChart(id));
-        saved = downloadBlob(out.bytes, exportFileName("pdf", range), PDF_MIME);
+        const out = await renderPdf(model, (id) => rasterizeSnapshot(snaps.get(id) ?? null));
+        lossy = out.lossy;
+        saved = downloadBlob(out.bytes, exportFileName("pdf", exportRange), PDF_MIME);
+      } else {
+        return;
       }
-      setMsg({ kind: "success", text: successMessage(saved) });
+      setMsg({ kind: "success", text: successMessage(saved, lossy) });
     } catch (e) {
       setMsg({ kind: "error", text: errorMessage(kind, e) });
     } finally {
       setBusy(null);
+      onBusyChange?.(false);
     }
   };
 

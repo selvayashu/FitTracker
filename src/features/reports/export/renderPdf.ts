@@ -8,17 +8,28 @@ const FOOTER_RESERVE = 10;
 const MAX_Y = PAGE.h - PAGE.margin - FOOTER_RESERVE;
 const CHART_MAX_H = 80;
 
-/** Helvetica in jsPDF only covers Latin-1; map common typography and drop the rest so nothing garbles. */
-export function pdfSafe(text: string): string {
-  return text
-    .replace(/[–—−]/g, "-")
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/…/g, "...")
-    .replace(/≈/g, "~")
-    .replace(/[\u00A0\u2009\u202F]/g, " ")
-    .replace(/[^\n\x20-\xFF]/g, "?");
+/**
+ * Helvetica in jsPDF only covers Latin-1; map common typography and replace anything else with "?".
+ * `replaced` is true when characters were lost (so the caller can add a note).
+ */
+export function pdfSafeInfo(text: string): { text: string; replaced: boolean } {
+  const mapped = text
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\u2026/g, "...")
+    .replace(/\u2248/g, "~")
+    .replace(/[\u00A0\u2009\u202F]/g, " ");
+  let replaced = false;
+  const out = mapped.replace(/[^\n\x20-\x7E\xA0-\xFF]/gu, () => { replaced = true; return "?"; });
+  return { text: out, replaced };
 }
+
+export function pdfSafe(text: string): string {
+  return pdfSafeInfo(text).text;
+}
+
+export const LOSSY_NOTE = "Some characters (for example non-Latin food names) could not be shown in this PDF; they are preserved in the CSV export.";
 
 /** Group stats into rows of two for the two-column grid. */
 export function pairUp<T>(items: T[]): T[][] {
@@ -35,20 +46,30 @@ export type ChartProvider = (id: PdfChartId) => Promise<ChartImage | null>;
 
 interface AutoTableDoc { lastAutoTable?: { finalY: number } }
 
-export interface RenderedPdf { bytes: ArrayBuffer; pages: number }
+export interface RenderedPdf {
+  bytes: ArrayBuffer;
+  pages: number;
+  /** true when some characters could not be shown (a note was added to the PDF) */
+  lossy: boolean;
+  /** per stats row: box height in mm and wrapped line counts (label, value, note per cell) */
+  statsLayout: Array<{ height: number; lineCounts: number[] }>;
+}
 
 /** Render the model to a PDF. jsPDF and autotable are imported here (dynamically) so they stay out of the main bundle. */
 export async function renderPdf(model: PdfDocModel, getChart: ChartProvider = async () => null): Promise<RenderedPdf> {
   const [{ jsPDF }, autoTableMod] = await Promise.all([import("jspdf"), import("jspdf-autotable")]);
   const autoTable = autoTableMod.default;
   const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-  doc.setProperties({ title: pdfSafe(model.title) });
+  let lossy = false;
+  const safe = (t: string): string => { const r = pdfSafeInfo(t); if (r.replaced) lossy = true; return r.text; };
+  const statsLayout: RenderedPdf["statsLayout"] = [];
+  doc.setProperties({ title: safe(model.title) });
   let y = PAGE.margin;
 
   const ensure = (h: number) => {
     if (y + h > MAX_Y) { doc.addPage(); y = PAGE.margin; }
   };
-  const lines = (text: string, width: number): string[] => doc.splitTextToSize(pdfSafe(text), width) as string[];
+  const lines = (text: string, width: number): string[] => doc.splitTextToSize(safe(text), width) as string[];
   const ink = (r: number, g: number, b: number) => doc.setTextColor(r, g, b);
   const writeLines = (ls: string[], x: number, size: number, lh: number) => {
     for (const l of ls) { ensure(lh); doc.text(l, x, y + size * 0.3528); y += lh; }
@@ -71,12 +92,18 @@ export async function renderPdf(model: PdfDocModel, getChart: ChartProvider = as
       case "stats": {
         const colW = (CONTENT_W - 4) / 2;
         for (const row of pairUp(block.items)) {
-          const cells = row.map((it) => ({
-            label: lines(it.label, colW - 6),
-            value: lines(it.value, colW - 6),
-            note: it.note ? lines(it.note, colW - 6) : [],
-          }));
+          // Measure each text in the font it will be drawn in (never inherit the previous block's font).
+          const cells = row.map((it) => {
+            doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+            const label = lines(it.label, colW - 6);
+            doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+            const value = lines(it.value, colW - 6);
+            doc.setFont("helvetica", "normal"); doc.setFontSize(7);
+            const note = it.note ? lines(it.note, colW - 6) : [];
+            return { label, value, note };
+          });
           const h = Math.max(...cells.map((c) => 3.5 * c.label.length + 5.5 * c.value.length + 3.2 * c.note.length)) + 5;
+          statsLayout.push({ height: h, lineCounts: cells.flatMap((c) => [c.label.length, c.value.length, c.note.length]) });
           ensure(h + 2);
           cells.forEach((c, i) => {
             const x = PAGE.margin + i * (colW + 4);
@@ -103,8 +130,8 @@ export async function renderPdf(model: PdfDocModel, getChart: ChartProvider = as
         }
         autoTable(doc, {
           startY: y,
-          head: [block.head.map(pdfSafe)],
-          body: block.rows.map((r) => r.map(pdfSafe)),
+          head: [block.head.map(safe)],
+          body: block.rows.map((r) => r.map(safe)),
           margin: { left: PAGE.margin, right: PAGE.margin, top: PAGE.margin, bottom: PAGE.margin + FOOTER_RESERVE },
           theme: "grid",
           styles: { fontSize: 8, cellPadding: 1.6, overflow: "linebreak", textColor: [17, 24, 39], lineColor: [209, 213, 219], lineWidth: 0.1 },
@@ -164,6 +191,11 @@ export async function renderPdf(model: PdfDocModel, getChart: ChartProvider = as
     y += 3;
   }
 
+  if (lossy) {
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); ink(107, 114, 128);
+    writeLines(lines(LOSSY_NOTE, CONTENT_W), PAGE.margin, 8, 4);
+  }
+
   const total = doc.getNumberOfPages();
   for (let p = 1; p <= total; p++) {
     doc.setPage(p);
@@ -171,5 +203,5 @@ export async function renderPdf(model: PdfDocModel, getChart: ChartProvider = as
     doc.text("FitTrack - estimates, not medical advice", PAGE.margin, PAGE.h - PAGE.margin + 2);
     doc.text(pageLabel(p, total), PAGE.w - PAGE.margin, PAGE.h - PAGE.margin + 2, { align: "right" });
   }
-  return { bytes: doc.output("arraybuffer"), pages: total };
+  return { bytes: doc.output("arraybuffer"), pages: total, lossy, statsLayout };
 }
