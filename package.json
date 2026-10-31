@@ -12,16 +12,20 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p functions/tsconfig.json",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "icons": "pwa-assets-generator"
   },
   "dependencies": {
     "@fittrack/shared": "*",
     "@supabase/supabase-js": "^2.45.0",
     "idb": "^8.0.0",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.0",
-    "recharts": "^2.12.7"
+    "recharts": "^2.12.7",
+    "workbox-window": "^7.4.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260702.1",

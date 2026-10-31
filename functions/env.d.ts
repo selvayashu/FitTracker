@@ -10,4 +10,12 @@ interface Env {
   STRAVA_STATE_SECRET: string;
   /** Optional. The id returned when the webhook subscription was created; when set, webhook events from any other subscription are ignored. */
   STRAVA_SUBSCRIPTION_ID?: string;
+  /** Phase 4 (weekly email). */
+  RESEND_API_KEY: string;
+  /** e.g. "FitTrack <summary@yourdomain.com>". Defaults to Resend's sandbox sender, which only delivers to your own Resend account email. */
+  EMAIL_FROM?: string;
+  /** Shared secret that the Supabase cron job sends in the `x-cron-secret` header. */
+  CRON_SECRET: string;
+  /** HMAC key for one-click unsubscribe links. */
+  EMAIL_TOKEN_SECRET: string;
 }

@@ -30,6 +30,8 @@ export interface ProfileRow {
   carb_target_g: number | null;
   fat_target_g: number | null;
   onboarded: boolean;            // default false
+  email_weekly: boolean;         // Phase 4: opt in to the weekly summary email, default false
+  last_weekly_email_at: string | null; // Phase 4: set by the Worker after a successful send
   created_at: string;
   updated_at: string;
 }
