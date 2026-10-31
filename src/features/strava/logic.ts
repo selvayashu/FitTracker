@@ -50,8 +50,20 @@ export function mapStravaError(code: string, fallback?: string): MappedError {
     case "unauthenticated":
       return { code, action: "signin", message: "Your session expired. Please sign in again." };
     default:
-      return { code, action: "retry", message: fallback ? `Strava sync failed: ${fallback}` : "Strava sync failed. Please try again." };
+      void fallback; // raw server text is never shown to users
+      return { code, action: "retry", message: GENERIC_STRAVA_ERROR };
   }
+}
+
+export const GENERIC_STRAVA_ERROR = "Something went wrong talking to Strava. Please try again.";
+
+/** Friendly text for a status-read failure (never the raw server/database text). */
+export function friendlyStatusError(raw: string | null | undefined): string {
+  const m = (raw ?? "").toLowerCase();
+  if (m.includes("not_configured")) return mapStravaError("not_configured").message;
+  if (/failed to fetch|network|timeout|offline/.test(m)) return mapStravaError("network").message;
+  if (/jwt|unauthor|not authenticated/.test(m)) return mapStravaError("unauthenticated").message;
+  return GENERIC_STRAVA_ERROR;
 }
 
 /** Messages for the `?strava=error&reason=` return URL (reasons used by functions/_lib/handlers.ts). */

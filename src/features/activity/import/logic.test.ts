@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { deterministicActivityId, hrZoneSecondsForWorkout, parseActivityFile } from "@fittrack/shared";
 import type { ActivityTypeRow } from "@/lib/database.types";
 import {
-  assembleRow, chunk, decideStatus, defaultTypeChoice, existingWindow, formatMinutes, importButtonLabel, maxHrFor, needsTzChoice,
+  assembleRow, computeIds, chunk, decideStatus, defaultTypeChoice, existingWindow, formatMinutes, importButtonLabel, maxHrFor, needsTzChoice,
   parseTexts, selectionProblem, similarCount, summaryText, validateFiles, validateParsedWorkout,
 } from "./logic";
 
@@ -124,4 +124,13 @@ describe("integration: parse -> status -> row", () => {
     expect(validateParsedWorkout(items[0].workout, new Date("2020-01-01")).length).toBeGreaterThan(0);
   });
   it("parseActivityFile rejects empty text", () => expect(parseActivityFile("", {}).ok).toBe(false));
+});
+
+describe("computeIds", () => {
+  it("one failing workout does not break the others", async () => {
+    const { items } = parseTexts([{ name: "a.gpx", text: gpx("Z") }, { name: "b.gpx", text: gpx("Z", "yoga") }], "utc");
+    let n = 0;
+    const ids = await computeIds(items, async () => { n++; if (n === 1) throw new TypeError("crypto.subtle undefined"); return "id-2"; });
+    expect(Object.keys(ids)).toEqual([items[1].key]);
+  });
 });

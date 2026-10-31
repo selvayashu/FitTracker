@@ -153,3 +153,19 @@ export function formatMinutes(sec: number): string {
 }
 
 export { validateParsedWorkout };
+
+export const SECURE_CONTEXT_MESSAGE = "Import needs a secure (https) connection";
+
+/** True when the browser can hash (crypto.subtle is missing on plain http). */
+export const canHash = (): boolean => typeof globalThis.crypto !== "undefined" && !!globalThis.crypto.subtle;
+
+/** Compute ids one by one so a failing workout is left out without breaking the others. */
+export async function computeIds(
+  items: ParsedItem[], hash: (w: ParsedWorkout) => Promise<string>,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const i of items) {
+    try { out[i.key] = await hash(i.workout); } catch { /* left out: shown as can't import */ }
+  }
+  return out;
+}

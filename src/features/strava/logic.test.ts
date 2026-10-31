@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SyncResult } from "@fittrack/shared";
 import {
   BUSY_WAIT_SEC, MAX_BATCHES, MAX_BUSY_RETRIES, isBusyResult,
-  AUTO_SYNC_INTERVAL_MS, MAX_RATE_LIMIT_RETRIES, chipView, clampWaitSec, formatCountdown, mapReturnReason, mapStravaError,
+  AUTO_SYNC_INTERVAL_MS, MAX_RATE_LIMIT_RETRIES, chipView, clampWaitSec, formatCountdown, friendlyStatusError, mapReturnReason, mapStravaError,
   parseReturnParams, progressText, secondsLeft, shouldAutoSync, stripReturnParams, syncLoop,
 } from "./logic";
 
@@ -50,7 +50,16 @@ describe("error mapping", () => {
     expect(m.message).toMatch(/not set up on this server/);
     expect(m.message).not.toContain("STRAVA_CLIENT_ID");
   });
-  it("includes server text for unknown codes", () => expect(mapStravaError("x", "oops").message).toContain("oops"));
+  it("never shows raw server text for unknown codes", () => {
+    expect(mapStravaError("x", "oops").message).toBe("Something went wrong talking to Strava. Please try again.");
+  });
+  it("friendlyStatusError maps without leaking raw text", () => {
+    expect(friendlyStatusError("TypeError: Failed to fetch")).toMatch(/Could not reach/);
+    expect(friendlyStatusError("JWT expired")).toMatch(/session expired/);
+    expect(friendlyStatusError("not_configured")).toMatch(/not set up/);
+    expect(friendlyStatusError("relation x violates 42P01")).toBe("Something went wrong talking to Strava. Please try again.");
+    expect(friendlyStatusError(null)).toBe("Something went wrong talking to Strava. Please try again.");
+  });
   it("maps return reasons", () => {
     expect(mapReturnReason("access_denied")).toMatch(/cancelled/);
     expect(mapReturnReason(null)).toMatch(/Could not connect/);

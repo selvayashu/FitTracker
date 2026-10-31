@@ -9,7 +9,7 @@ import { Banner, inputCls, primaryBtn, secondaryBtn } from "@/features/profile/u
 import { loadActivities, useActivityStore } from "../store";
 import { fetchExisting, fetchExistingIds, fetchTypes, runImport, type ImportEntry } from "./api";
 import {
-  NO_WEIGHT_NOTE, OFFLINE_MESSAGE, assembleRow, decideStatus, defaultTypeChoice, existingWindow, formatMinutes, importButtonLabel,
+  NO_WEIGHT_NOTE, OFFLINE_MESSAGE, SECURE_CONTEXT_MESSAGE, canHash, computeIds, assembleRow, decideStatus, defaultTypeChoice, existingWindow, formatMinutes, importButtonLabel,
   isOtherType, maxHrFor, needsTzChoice, parseTexts, selectionProblem, similarCount, summaryText, validateFiles, validateParsedWorkout,
   type ExistingActivity, type FileText, type ImportOutcome, type RejectedFile, type TypeChoice,
 } from "./logic";
@@ -70,16 +70,17 @@ export function ImportSheet({ onClose, onImported }: { onClose: () => void; onIm
     let live = true;
     (async () => {
       try {
-        const entries = await Promise.all(items.map(async (i) => [i.key, await deterministicActivityId(userId, i.workout)] as const));
-        const idMap = Object.fromEntries(entries);
+        if (!canHash()) { if (live) setLookupError(SECURE_CONTEXT_MESSAGE); return; }
+        const idMap = await computeIds(items, (w) => deterministicActivityId(userId, w));
+        const entries = Object.entries(idMap);
         const win = existingWindow(items);
         const [existing, idSet] = await Promise.all([
           win ? fetchExisting(userId, win.fromIso, win.toIso) : Promise.resolve([]),
           fetchExistingIds(entries.map((e) => e[1])),
         ]);
         if (live) { setIds(idMap); setLookup({ existing, idSet }); }
-      } catch (e) {
-        if (live) setLookupError(e instanceof Error ? e.message : "Could not check your existing activities.");
+      } catch {
+        if (live) setLookupError("lookup");
       }
     })();
     return () => { live = false; };
@@ -91,6 +92,9 @@ export function ImportSheet({ onClose, onImported }: { onClose: () => void; onIm
   const rows = useMemo(() => items.map((item) => {
     const choice = choices[item.key] ?? defaultTypeChoice(item.workout, types);
     const id = ids?.[item.key] ?? null;
+    if (ready && choice && !id) {
+      return { item, choice, id, status: decideStatus({ problems: ["could not identify this workout"], idExists: false, similarCount: 0 }), checked: false };
+    }
     if (!ready || !choice || !id || !lookup) return { item, choice, id, status: null, checked: false };
     const problems = [...validateParsedWorkout(item.workout)];
     const sel = selectionProblem(choice, types);
@@ -187,7 +191,7 @@ export function ImportSheet({ onClose, onImported }: { onClose: () => void; onIm
         {rejected.map((r) => <Banner key={`${r.name}-${r.reason}`} kind="error">{r.name}: {r.reason}</Banner>)}
         {parsed.errors.map((e) => <Banner key={e.fileName} kind="error">{e.fileName}: {e.message}</Banner>)}
         {typesError && <Banner kind="error">Could not load activity types: {typesError}</Banner>}
-        {lookupError && <Banner kind="error">Could not check your existing activities: {lookupError}</Banner>}
+        {lookupError && <Banner kind="error">{lookupError === SECURE_CONTEXT_MESSAGE ? lookupError : "Could not check your existing activities. Check your connection and try again."}</Banner>}
 
         {texts.length === 0 && !reading && (
           <p className="text-center text-sm text-slate-500 dark:text-slate-400">No files chosen yet.</p>
