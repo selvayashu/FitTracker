@@ -1,6 +1,8 @@
 # Phase 2 Test Checklist (Strava)
 
 Covers: Strava connect, 90-day sync, webhook updates, heart-rate zones, duplicate handling, disconnect.
+> **Important:** Strava now requires a Strava **subscription** to create an API app. Without one this whole checklist cannot be run; use manual entry or the file import instead.
+
 Prerequisite: Phase 1 works (see `docs/PHASE1-TEST-CHECKLIST.md`). Nothing in Phase 2 has run against real Strava or Supabase yet, so **record every failure** (screen, steps, what you saw, browser console and Cloudflare logs).
 
 Mark each item: [x] pass, [!] fail (add a note), [-] skipped.

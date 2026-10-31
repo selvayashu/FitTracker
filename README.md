@@ -73,12 +73,16 @@ Every push to `main` then redeploys automatically.
 
 ## 7. Strava (Phase 2, optional)
 
-FitTrack works fully without Strava. To enable syncing:
+FitTrack works fully without Strava. You can add activities by hand or **import workout files** (see section 10).
+
+> **Strava now requires a subscription to create an API app** ("A Strava subscription is a prerequisite for creating an app", per Strava's [developer docs](https://developers.strava.com/docs/getting-started/)). A new app starts in single-athlete mode (only the creator's account can connect); after upgrading in the API settings it allows 10 athletes, with default limits of 200 requests per 15 minutes and 2,000 per day. Whether an app keeps working if the subscription lapses is not documented there, so check Strava's current terms. If you do not have a subscription, skip this section and use manual entry or file import.
+
+To enable live syncing:
 
 **a. Create the Strava API app** at https://www.strava.com/settings/api
 - Application name and website: anything (your Pages URL is fine).
-- **Authorization Callback Domain:** your domain only, no `https://` and no path, for example `fittrack.pages.dev` (use `localhost` for local testing).
-- Copy the **Client ID** and **Client Secret**. A new Strava app is limited to one athlete (you) until Strava approves it, which is fine for personal use. Default limits are 100 requests per 15 minutes and 1,000 per day; the sync backs off automatically.
+- **Authorization Callback Domain:** your domain only, no `https://` and no path, for example `fittrack-101.pages.dev` (use `localhost` for local testing).
+- Copy the **Client ID** and **Client Secret**. The sync backs off automatically when Strava rate-limits it.
 
 **b. Apply the Strava migrations.** `supabase/migrations/0006_strava.sql` and `0007_strava_id_unique.sql` (run after 0001-0005). Tokens are stored in a table that browsers cannot read.
 
@@ -146,6 +150,17 @@ Only the app files and the food and activity-type lists are cached for offline u
 **Security headers.** `public/_headers` sets standard protective headers and a Content-Security-Policy in **report-only** mode. After you have used every screen (including Strava, reports and PDF export) with the browser console open and seen no "Content Security Policy" violations, rename `Content-Security-Policy-Report-Only` to `Content-Security-Policy` in that file to enforce it.
 
 **Export.** Reports has an **Export** menu: Daily CSV, Entries CSV and PDF, for the range on screen.
+
+## 10. Importing workouts from a file (no Strava needed)
+
+**Activities, Import file** (or **Settings, Connections**) reads **GPX** and **TCX** files on your own device. Nothing is uploaded, and location data is not stored: only the start time, duration, distance, average and maximum heart rate, time in heart-rate zones and calories are saved. Imported workouts are normal editable activities, tagged "Imported from <file name>".
+
+- **Amazfit / Zepp (Android):** open a workout in the Zepp app and look for an Export or Share option that offers GPX. Names vary by app version.
+- **Garmin Connect (website):** open an activity, then the gear menu, **Export to GPX** or **Export to TCX**.
+- **Strava (website):** open an activity, then the three-dot menu, **Export GPX** (or **Export Original**). Strava's full data archive can be requested under Settings, My Account.
+- Files with no time-zone marker are read as UTC; the screen shows the start time in IST and has a switch if your file's times are already local (IST).
+- Importing the same file twice never creates a duplicate, and workouts that overlap one you already logged are flagged for you to choose.
+- FIT files (binary) are not supported yet.
 
 ## Project layout
 
