@@ -9,7 +9,7 @@ export function RequireAuth() {
   const { profile, loading: profileLoading, error, refresh } = useProfile();
   const { pathname } = useLocation();
 
-  if (sessionLoading || (user && profileLoading)) return <Spinner />;
+  if (sessionLoading || (user && profileLoading && !profile)) return <Spinner />;
   if (!user) return <Navigate to="/login" replace />;
   if (error) return <div className="p-4"><ErrorState message={`Could not load your profile: ${error}`} onRetry={() => void refresh()} /></div>;
   if (!profile?.onboarded && pathname !== "/onboarding") return <Navigate to="/onboarding" replace />;

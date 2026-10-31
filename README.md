@@ -25,7 +25,7 @@ npm install
 2. Apply the migrations in `supabase/migrations` **in order** (0001 to 0005). Either:
    - paste each file into the Supabase SQL Editor and run it, or
    - use the CLI: `npx supabase login`, `npx supabase link --project-ref <ref>`, `npx supabase db push`.
-3. Authentication, Providers: email is on by default. For Google sign-in, create an OAuth client in Google Cloud Console and add its client ID and secret under the Google provider. Add your site URL (local `http://localhost:5173` and your Cloudflare Pages URL) under Authentication, URL Configuration.
+3. Authentication, Providers: email is on by default. For Google sign-in, create an OAuth client in Google Cloud Console and add its client ID and secret under the Google provider. Add your site URL (local `http://localhost:5173` and your Cloudflare Pages URL, each also with `/reset-password` as an allowed redirect for the password-reset email) under Authentication, URL Configuration.
 4. For quick local testing you may turn off "Confirm email" under the email provider. Turn it back on for real use.
 
 More detail: `supabase/README.md`.

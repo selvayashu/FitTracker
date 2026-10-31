@@ -11,7 +11,7 @@ export type OutboxOp =
   | { kind: "upsert"; table: OutboxTable; row: Record<string, unknown> & { id: string }; onConflict?: string }
   | { kind: "delete"; table: OutboxTable; id: string };
 
-interface Queued { seq?: number; op: OutboxOp; queuedAt: number; error?: string }
+interface Queued { seq?: number; op: OutboxOp; queuedAt: number; userId?: string; error?: string }
 
 interface OutboxDB extends DBSchema {
   ops: { key: number; value: Queued };
@@ -43,9 +43,14 @@ export function subscribeOutbox(l: Listener): () => void {
   return () => { listeners.delete(l); };
 }
 
-/** Queue a write, then try to send immediately when online. Never throws for network problems. */
+async function currentUserId(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user.id ?? null;
+}
+
+/** Queue a write for the signed-in user, then try to send immediately when online. Never throws for network problems. */
 export async function enqueue(op: OutboxOp): Promise<void> {
-  await (await db()).add("ops", { op, queuedAt: Date.now() });
+  await (await db()).add("ops", { op, queuedAt: Date.now(), userId: (await currentUserId()) ?? undefined });
   await refresh();
   if (navigator.onLine) void flush();
 }
@@ -55,29 +60,52 @@ async function send(op: OutboxOp) {
   return supabase.from(op.table).upsert(op.row, { onConflict: op.onConflict ?? "id" });
 }
 
+/** Errors that mean "try again later" (expired token, offline) rather than "the server rejected this row". */
+function isRetryable(err: { code?: string; message: string; status?: number }): boolean {
+  const msg = err.message.toLowerCase();
+  return !err.code || err.code === "PGRST301" || err.status === 401 || err.status === 503 || msg.includes("jwt") || msg.includes("fetch");
+}
+
+let dirty = false;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryDelay = 2000;
+
+function scheduleRetry() {
+  if (retryTimer) return;
+  retryTimer = setTimeout(() => { retryTimer = null; void flush(); }, retryDelay);
+  retryDelay = Math.min(retryDelay * 2, 60000);
+}
+
 export async function flush(): Promise<void> {
-  if (flushing || !navigator.onLine) return;
+  if (!navigator.onLine) return;
+  if (flushing) { dirty = true; return; }   // a running flush will re-check the queue once it finishes
   flushing = true;
   await refresh();
+  let needsRetry = false;
   try {
     const d = await db();
-    for (const q of await d.getAll("ops")) {
-      if (q.error) continue;
-      let res;
-      try { res = await send(q.op); } catch { break; }       // network failure: keep and retry later
-      if (res.error) {
-        // Server-side rejection (validation/RLS): keep it visible instead of retrying forever.
-        if (res.error.code && !res.error.message.toLowerCase().includes("fetch")) {
+    const uid = await currentUserId();
+    do {
+      dirty = false;
+      for (const q of await d.getAll("ops")) {
+        if (q.error) continue;
+        if (q.userId && q.userId !== uid) continue;   // another account's writes wait for that account
+        let res;
+        try { res = await send(q.op); } catch { needsRetry = true; break; }
+        if (res.error) {
+          if (isRetryable(res.error)) { needsRetry = true; break; }
+          // Server-side rejection (validation/RLS): keep it visible instead of retrying forever.
           await d.put("ops", { ...q, error: res.error.message });
           continue;
         }
-        break;
+        await d.delete("ops", q.seq!);
+        retryDelay = 2000;
       }
-      await d.delete("ops", q.seq!);
-    }
+    } while (dirty && !needsRetry);
   } finally {
     flushing = false;
     await refresh();
+    if (needsRetry) scheduleRetry();
   }
 }
 

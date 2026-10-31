@@ -30,7 +30,7 @@ export function LoginPage() {
     try {
       const addr = email.trim();
       if (mode === "reset") {
-        const { error } = await supabase.auth.resetPasswordForEmail(addr, { redirectTo: window.location.origin });
+        const { error } = await supabase.auth.resetPasswordForEmail(addr, { redirectTo: `${window.location.origin}/reset-password` });
         if (error) throw error;
         setMessage({ kind: "success", text: "If an account exists for that email, a reset link is on its way." });
       } else if (mode === "signup") {

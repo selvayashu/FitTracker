@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { computeProfileDerived, type ProfileDerived, type ProfileInput } from "@fittrack/shared";
 import type { ProfileRow } from "./database.types";
 import { supabase } from "./supabase";
@@ -27,18 +27,21 @@ export function toProfileInput(p: ProfileRow | null): ProfileInput | null {
 
 export function ProfileProvider({ children }: { children: ReactNode }) {
   const { user } = useSession();
+  const userId = user?.id ?? null;
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const loadedFor = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!user) { setProfile(null); setLoading(false); return; }
-    setLoading(true);
-    const { data, error: err } = await supabase.from("profiles").select("*").eq("user_id", user.id).maybeSingle();
+    if (!userId) { loadedFor.current = null; setProfile(null); setError(null); setLoading(false); return; }
+    // Only the first load for a user shows the loading state, so a refresh after a save never unmounts the page.
+    if (loadedFor.current !== userId) setLoading(true);
+    const { data, error: err } = await supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle();
     setError(err ? err.message : null);
-    setProfile((data as ProfileRow | null) ?? null);
+    if (!err) { setProfile((data as ProfileRow | null) ?? null); loadedFor.current = userId; }
     setLoading(false);
-  }, [user]);
+  }, [userId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
